@@ -74,5 +74,6 @@ npm run test:plugin   # claude plugin test pipeline-agents
 
 The plugin test (`pipeline-agents/test/report-result.test.ts`) loads `pipeline-agents` with a stand-in for the loop
 named `pipeline`, and checks that an agent `pipeline` spawned from its timer gets its `report_result` call answered,
-and would not if `pipeline` owned the tool. Run it on the `pipeline-agents` folder: `claude plugin test .` at the
-repo root runs it with the real `pipeline` loaded as well, and fails with `pipeline is loaded twice`.
+and would not if `pipeline` owned the tool. The root plugin has no plugin tests: `claude plugin test pipeline-agents`
+(`npm run test:plugin`) is the only plugin-test invocation, since a root run loads the real `pipeline` and never
+loads the nested `pipeline-agents` folder.

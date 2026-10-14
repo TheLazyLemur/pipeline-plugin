@@ -1,5 +1,6 @@
 import type { On } from 'claude-code'
 import { type Plugin, expect, mock, test } from 'claude-code/testing'
+import { DB } from '../src/store.ts'
 
 // The engine skips a plugin's hooks for an agent that plugin spawned from its own code (docs/adr/0001). The kit
 // loads one plugin from a folder, beside inline plugins that close over nothing, so the loop is a stand-in named
@@ -16,7 +17,7 @@ const agent: Plugin = {
   register(on) {
     on('agent.spawn', async ($, e, next) => {
       const spawned = await next(e)
-      const answer = await $.tool.call({ tool: e.prompt, agentId: spawned.agentId, status: 'pr_open', pr_url: 'https://github.com/o/r/pull/1' })
+      const answer = await $.tool.call({ tool: e.prompt as `mcp__${string}__${string}`, agentId: spawned.agentId, status: 'pr_open', pr_url: 'https://github.com/o/r/pull/1' }) // the literal of PR: an inline plugin's register closes over nothing of this file
       $.ui.log(`answer ${JSON.stringify(answer)}`)
       return spawned
     })
@@ -49,6 +50,7 @@ const pipelineDb = (on: On) => {
   const out = (exitCode: number, stdout: string) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
   on('process.run', async (_, e) => {
     if (e.argv[0] === 'cat') return out(1, '') // no routing.md: review from difficulty 3
+    expect(e.argv.slice(0, 6)).toEqual(['sqlite3', '-bail', '-json', '-cmd', '.timeout 5000', DB])
     const statement = e.argv.at(-1) ?? ''
     if (statement === "select difficulty, stage from tickets where ticket_id = 'T-1'") return out(0, JSON.stringify([row]))
     const set = statement.match(/^update tickets set status = '(\w+)', pr_url = '([^']+)' where ticket_id = 'T-1' and status = 'in_progress' and coalesce\(stage, 'implement'\) = 'implement' returning ticket_id$/)
