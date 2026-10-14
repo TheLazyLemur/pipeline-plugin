@@ -17,7 +17,9 @@ The database is `.claude/pipeline/pipeline.db`, table `tickets`, read and writte
      `<n>. fixed: ...` or `<n>. not fixed: <reason>` is the outcome of finding `<n>` in the checked list.
    - **human comments**: every other review comment and thread.
 
-   Skip a PR whose title still starts with `Draft: ` unless it is merged or closed: agent review has not finished.
+   Skip a PR whose title still starts with `Draft: ` and has no agent findings comment, unless it is merged or
+   closed: agent review has not finished. A draft PR with a `Checked review findings` comment is processed (the
+   fixer blocked or never ran, and agent review has produced its record).
    Skip a PR with no agent findings and no human comments unless it is merged or closed. A PR with agent findings
    and no human comments is processed.
 3. Classify what each PR raised:
@@ -42,4 +44,6 @@ The database is `.claude/pipeline/pipeline.db`, table `tickets`, read and writte
      (routing.md's `Review threshold`),
    - or a checklist the project keeps.
 6. Show each proposed change as a diff. Apply it only when the user approves it.
-7. When a PR is done: `update tickets set learned = 1 where ticket_id = '<id>'`
+7. Once every proposal of the run has been approved or declined, mark each PR this run processed as learned:
+   `update tickets set learned = 1 where ticket_id = '<id>'`. Not before: a PR's mistakes count towards step 4's
+   grouping until the run ends. A PR skipped in step 2 stays at `learned = 0`.

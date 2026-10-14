@@ -25,7 +25,7 @@ Then, in your project:
 |---|---|
 | `/pipeline:tracker-setup` | Connects the pipeline to your tracker and writes `.claude/pipeline/tracker.md`. Run once per project, and again to switch tracker. |
 | `/pipeline:pipeline-status` | Shows where every ticket stands and lets you answer the ones in `needs_human`. |
-| `/pipeline:learn` | Works through the review of the pipeline's PRs, human comments and agent findings with the fixer's outcome, with you and changes the file that would have prevented each problem. |
+| `/pipeline:learn` | Works through the review of the pipeline's PRs with you (human comments, and the verifier's findings with the fixer's outcome) and changes the file that would have prevented each problem. |
 
 Once `/pipeline:tracker-setup` has run, the loop starts with the session: the first pass runs 10 seconds after start,
 then one pass every 5 minutes. Pipeline state lives in `.claude/pipeline/pipeline.db`.
