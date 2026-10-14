@@ -111,9 +111,10 @@ missing). Such a ticket's implementer opens its PR with a `Draft: ` title prefix
   opus → fable, fable → fable): each reads the ticket, any spec it references and the PR at its head commit, and
   posts its findings as one ticket comment.
 - `verifier`, on the same tier: checks each finding against the code, drops false ones, merges duplicates, posts
-  the checked list on the ticket and the PR, removes the `Draft: ` prefix when none are left, and reports the count.
+  the checked list under the heading `Checked review findings` on the ticket and the PR, removes the `Draft: `
+  prefix when none are left, and reports the count.
 - `fixer`, on the routed model: addresses the checked findings on the same branch and PR, comments on the PR what
-  it fixed and why not the rest, removes the `Draft: ` prefix and reports.
+  it fixed and why not the rest under the heading `Fixer notes`, removes the `Draft: ` prefix and reports.
 
 One round only. Every stage is read from the table and the live agents each pass, so a reload or restart picks up
 where it was. An agent that cannot be spawned sends the ticket to needs_human with the PR still a draft.
@@ -188,10 +189,13 @@ title prefix.
 One file per role; the model is passed at spawn. Described above under agent review.
 
 ### `/learn` (skill)
-Finds PRs in SQLite with learned = false. For each, reads the review comments and works through them
-with the human: what went wrong and which file should change so it does not happen again —
-CLAUDE.md, rules, the implementer prompts, readiness.md, rubric.md or checklists. The human approves
-each change. Marks the PR learned.
+Finds PRs in SQLite with learned = false. For each, reads the human review comments, the verifier's
+`Checked review findings` and the fixer's `Fixer notes`; a PR with agent findings and no human comments is
+processed too. A finding the fixer fixed is a confirmed implementer mistake; one it declined is shown to the
+human with the fixer's reason as a judgement call. Confirmed mistakes are grouped by kind across the PRs of the
+run, since a repeated one points at a standing instruction. With the human it works out what went wrong and which
+file should change so it does not happen again — CLAUDE.md, rules, the implementer prompts, readiness.md,
+rubric.md or checklists. The human approves each change. Marks the PR learned.
 
 ## Not in this version
 A separate inbox (the needs_human status covers it), calibration dashboards, status band, guards, worktree management by the mod (the implementer makes its own). The mod runs the loop and nothing else.

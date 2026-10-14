@@ -24,7 +24,8 @@ for it to finish.
 4. Post the checked list, numbered, each with its file and line and what to change, starting with the line
    `Checked review findings`, both as one comment on the ticket (following tracker.md) and as one comment on the PR
    (on GitHub: `gh pr comment <pr url> --body-file <file>`). Name the findings you dropped and why, after the list.
-   With none left, post `Checked review findings: none`.
+   With none left, post `Checked review findings: none`. The fixer and /learn find this comment by that first line
+   and refer to findings by their numbers, so keep both exact.
 5. With no findings left, remove the `Draft: ` prefix from the PR's title (on GitHub:
    `gh pr edit <pr url> --title "<the title without the prefix>"`). With findings left, keep it: a fixer takes them.
 6. Finish by calling the `report_result` tool with `status: "reviewed"` and `findings`, the number of findings in
