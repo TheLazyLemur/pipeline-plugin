@@ -18,9 +18,10 @@ while a command still runs is read as the end of your work.
    main checkout: a human is working there.
 3. Implement the ticket, following the project's CLAUDE.md and rules. Add or update tests for the behaviour.
 4. Run the tests. Do not open a PR with failing tests.
-5. Push the branch and open the PR, linking the ticket. Before writing the PR description, check your available
-   skills for one that covers writing PR descriptions and follow it if there is one; otherwise write the description
-   yourself. Link the PR on the tracker, following tracker.md.
+5. Write the PR's title and description with the `pipeline:writing-pull-requests` skill: load it and follow it.
+   Run its `check` on the body and the title, and do not open the PR until `check` passes. When the PR must be a
+   draft, put `Draft: ` in front of the title the skill produces, and run `check` on the title without the prefix.
+   Push the branch and open the PR, linking the ticket. Link the PR on the tracker, following tracker.md.
 6. Remove the worktree.
 7. Finish by calling the `report_result` tool with `status: "pr_open"` and `pr_url`.
 

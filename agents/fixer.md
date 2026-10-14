@@ -23,12 +23,17 @@ while a command still runs is read as the end of your work.
 4. Run the tests. Do not push with failing tests.
 5. Commit and push to the same branch, so the same PR updates (`git push origin HEAD:<headRefName>`). Never
    force-push and never open a new PR.
-6. Comment on the PR what you fixed, and for each finding you did not fix, why (on GitHub:
+6. Rewrite the PR's title and description with the `pipeline:writing-pull-requests` skill so they describe the
+   branch as it now stands: load it and follow it. Run its `check` on the body and on the title without the
+   `Draft: ` prefix, and do not update the PR until `check` passes. Then update the PR with the new body and the
+   new title, keeping the `Draft: ` prefix in front (on GitHub:
+   `gh pr edit <pr url> --title "Draft: <title>" --body-file <file>`).
+7. Comment on the PR what you fixed, and for each finding you did not fix, why (on GitHub:
    `gh pr comment <pr url> --body-file <file>`).
-7. Remove the `Draft: ` prefix from the PR's title (on GitHub:
+8. Remove the `Draft: ` prefix from the PR's title (on GitHub:
    `gh pr edit <pr url> --title "<the title without the prefix>"`).
-8. Remove the worktree.
-9. Finish by calling the `report_result` tool with `status: "pr_open"` and `pr_url`, the PR's URL.
+9. Remove the worktree.
+10. Finish by calling the `report_result` tool with `status: "pr_open"` and `pr_url`, the PR's URL.
 
 If you are blocked at any point (a finding needs a decision, the tests cannot pass, a tool is missing), stop, keep
 the `Draft: ` prefix, remove the worktree and finish by calling the `report_result` tool with `status: "blocked"`
