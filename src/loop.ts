@@ -32,7 +32,7 @@ export const pass = async (d: Deps): Promise<string[]> => {
     read(d.run, 'rubric'),
     read(d.run, 'routing'),
   ])
-  if (tracker === null || readiness === null || rubric === null || routing === null) return [`${TAG}: no .claude/pipeline setup here; run /tracker-setup`]
+  if (tracker === null || readiness === null || rubric === null || routing === null) return [`no .claude/pipeline setup here; run /tracker-setup`]
   await sql(d.run, DB, SCHEMA)
   const log: string[] = []
   const live = (await d.agents()).filter(a => a.spawnedBy === d.plugin && LIVE.includes(a.status)).map(a => a.description)
@@ -40,7 +40,7 @@ export const pass = async (d: Deps): Promise<string[]> => {
   // 1. sync: an agent following tracker-sync; what it adds is triaged next pass
   if (!live.includes(SYNC)) {
     const s = await d.spawn({ description: SYNC, model: 'haiku', prompt: `Read ${d.pluginRoot}/skills/tracker-sync/SKILL.md and follow it.` })
-    if (s.deny !== undefined) log.push(`${TAG}: sync not started: ${s.deny}`)
+    if (s.deny !== undefined) log.push(`sync not started: ${s.deny}`)
   }
 
   // 2. triage; a failed ticket stays new and is retried next pass
@@ -48,9 +48,9 @@ export const pass = async (d: Deps): Promise<string[]> => {
   for (const t of fresh) {
     try {
       const v = await triage(d.run, d.complete, DB, { readiness, rubric, routing }, t)
-      log.push(v.ready ? `${TAG}: ${t.ticket_id} is ready for ${v.model}` : `${TAG}: ${t.ticket_id} needs you: ${v.question}`)
+      log.push(v.ready ? `${t.ticket_id} is ready for ${v.model}` : `${t.ticket_id} needs you: ${v.question}`)
     } catch (err) {
-      log.push(`${TAG}: ${(err as Error).message}`)
+      log.push(`${(err as Error).message}`)
     }
   }
 
@@ -61,7 +61,7 @@ export const pass = async (d: Deps): Promise<string[]> => {
     await sql(d.run, DB, `update tickets set status = 'needs_human',
         question = 'The implementer stopped without recording a PR or a question. Check its branch, then send the ticket back to new.'
       where ticket_id = ${lit(t.ticket_id)} and status = 'in_progress'`)
-    log.push(`${TAG}: ${t.ticket_id} needs you: its implementer stopped without a result`)
+    log.push(`${t.ticket_id} needs you: its implementer stopped without a result`)
   }
   if (busy.length > orphans.length) return log
 
@@ -76,7 +76,7 @@ export const pass = async (d: Deps): Promise<string[]> => {
   })
   if (s.deny !== undefined) {
     await sql(d.run, DB, `update tickets set status = 'ready' where ticket_id = ${lit(next.ticket_id)} and status = 'in_progress'`)
-    log.push(`${TAG}: implementer for ${next.ticket_id} not started: ${s.deny}`)
-  } else log.push(`${TAG}: ${next.model} is implementing ${next.ticket_id}`)
+    log.push(`implementer for ${next.ticket_id} not started: ${s.deny}`)
+  } else log.push(`${next.model} is implementing ${next.ticket_id}`)
   return log
 }

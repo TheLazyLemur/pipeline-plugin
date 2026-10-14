@@ -23,7 +23,7 @@ export const register: Register = on => {
         })
         for (const line of lines) $.ui.log(line)
       } catch (err) {
-        $.ui.log(`${TAG}: pass failed: ${(err as Error).message}`)
+        $.ui.log(`pass failed: ${(err as Error).message}`)
       } finally {
         isRunning = false
       }
