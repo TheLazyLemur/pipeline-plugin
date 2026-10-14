@@ -19,7 +19,6 @@ const deps = (run: Run, agents: AgentInfo[], refuse = false) => {
       return (refuse ? { deny: 'no verdict' } : { model: 'x', agentId: 'a1' }) as AgentSpawnResult
     },
     agents: async () => agents,
-    pluginRoot: '/plugin',
     plugin: 'pipeline',
   }
   return { d, spawned }
@@ -37,8 +36,8 @@ test('the next ready ticket is handed to the implementer for its model', async (
   await pass(d)
 
   // then
-  // ... sync is started, the first ticket goes to the fable implementer and is in progress
-  assert.deepEqual(spawned.map(s => [s.description, s.subagentType]), [['pipeline sync', undefined], ['pipeline T-1', 'pipeline:implementer-fable']])
+  // ... the first ticket goes to the fable implementer and is in progress
+  assert.deepEqual(spawned.map(s => [s.description, s.subagentType]), [['pipeline T-1', 'pipeline:implementer-fable']])
   assert.deepEqual(await sql(run, db, `select ticket_id, status from tickets order by rowid`), [
     { ticket_id: 'T-1', status: 'in_progress' },
     { ticket_id: 'T-2', status: 'ready' },
@@ -47,10 +46,10 @@ test('the next ready ticket is handed to the implementer for its model', async (
 
 test('new tickets are triaged in the pass', async () => {
   // given
-  // ... a new ticket, an implementer and sync already running
+  // ... a new ticket and an implementer already running
   const { run, db } = await freshProject()
   await sql(run, db, `insert into tickets (ticket_id, title, status, model) values ('T-1', 'one', 'in_progress', 'opus'), ('T-2', 'two', 'new', null)`)
-  const { d } = deps(run, [live('pipeline sync'), live('pipeline T-1')])
+  const { d } = deps(run, [live('pipeline T-1')])
 
   // when
   // ... a pass runs
@@ -66,7 +65,7 @@ test('nothing is spawned while an implementer is running', async () => {
   // ... one ticket in progress with its implementer live, and one ready
   const { run, db } = await freshProject()
   await sql(run, db, `insert into tickets (ticket_id, title, status, model) values ('T-1', 'one', 'in_progress', 'opus'), ('T-2', 'two', 'ready', 'sonnet')`)
-  const { d, spawned } = deps(run, [live('pipeline sync'), live('pipeline T-1')])
+  const { d, spawned } = deps(run, [live('pipeline T-1')])
 
   // when
   // ... a pass runs
@@ -83,7 +82,7 @@ test('a ticket whose implementer is gone without a result goes to needs_human', 
   // ... a ticket in progress and no implementer live for it
   const { run, db } = await freshProject()
   await sql(run, db, `insert into tickets (ticket_id, title, status, model) values ('T-1', 'one', 'in_progress', 'opus')`)
-  const { d } = deps(run, [live('pipeline sync')])
+  const { d } = deps(run, [])
 
   // when
   // ... a pass runs
@@ -101,7 +100,7 @@ test('a refused spawn puts the ticket back to ready', async () => {
   // ... a ready ticket and spawns being refused
   const { run, db } = await freshProject()
   await sql(run, db, `insert into tickets (ticket_id, title, status, model) values ('T-1', 'one', 'ready', 'sonnet')`)
-  const { d } = deps(run, [live('pipeline sync')], true)
+  const { d } = deps(run, [], true)
 
   // when
   // ... a pass runs

@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { ProcessRunResult } from 'claude-code'
 import { DB, type Run, SCHEMA, sql } from '../src/store.ts'
+import { BLOCKERS, DONE, WAITING } from '../src/sync.ts'
 
 /** `$.process.run` over child_process. */
 export const run: Run = async (argv, init) => {
@@ -28,7 +29,10 @@ export const freshDb = async () => {
 export const freshProject = async () => {
   const root = mkdtempSync(join(tmpdir(), 'pipeline-project-'))
   mkdirSync(join(root, '.claude/pipeline'), { recursive: true })
-  for (const name of ['tracker', 'readiness', 'rubric', 'routing']) writeFileSync(join(root, `.claude/pipeline/${name}.md`), `# ${name}\n`)
+  for (const name of ['readiness', 'rubric', 'routing']) writeFileSync(join(root, `.claude/pipeline/${name}.md`), `# ${name}\n`)
+  // a tracker with nothing in it: each sync command prints no rows
+  const empty = [WAITING, DONE, BLOCKERS].map(h => `## ${h}\n\`\`\`sh\ntrue\n\`\`\`\n`).join('')
+  writeFileSync(join(root, '.claude/pipeline/tracker.md'), `# tracker\n${empty}`)
   const inRoot: Run = (argv, init) => run(argv, { cwd: root, ...init })
   await sql(inRoot, DB, SCHEMA)
   return { run: inRoot, db: DB }

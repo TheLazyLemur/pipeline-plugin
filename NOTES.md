@@ -13,10 +13,9 @@ Things SPEC.md does not settle. Built without them; each needs Daniel's call.
    prompt (create, then remove), no mod code. Keep it?
 4. **Defaults for readiness.md, rubric.md and routing.md** ship in `skills/tracker-setup/defaults/` and
    /tracker-setup copies them into `.claude/pipeline/` when absent. SPEC.md does not say who writes them.
-5. **The loop's agents' completion notices are dropped** (`prompt.submit`, origin `task-notification`, an agent
-   described `pipeline …`). Without it every sync and implementer that finishes starts a main-thread turn, which
-   SPEC.md says the loop must never do. You still see a one-line notice. Sync runs every pass, so that is one
-   line every 5 minutes. Fine, or sync less often?
+5. **The implementer's completion notice is dropped** (`prompt.submit`, origin `task-notification`, an agent
+   described `pipeline …`). Without it every implementer that finishes starts a main-thread turn, which SPEC.md
+   says the loop must never do. You still see a one-line notice per implementer.
 6. **An in_progress ticket with no live implementer goes to needs_human.** Otherwise a crashed or killed
    implementer (or a session restart) leaves it in_progress and the loop never spawns again.
 7. **Background agents and permissions.** Under auto mode the first timer-driven spawn in the probe was denied
@@ -30,8 +29,10 @@ Things SPEC.md does not settle. Built without them; each needs Daniel's call.
 10. **/learn edits the implementer prompts inside the plugin** (`agents/implementer-<model>.md`). If the plugin is
     installed from a marketplace, an update overwrites those edits. Should project-level overrides live in
     `.claude/pipeline/` instead?
-11. **Epics and blocked tickets are kept out by sync, from instructions alone.** tracker.md's list command
-    filters out epics, and tracker.md describes how to read a ticket's blockers. Sync skips a blocked ticket,
-    or removes it while it is still `new` or `ready`, and pulls it in once its blockers are done. The loop and
-    the table are unchanged. A tracker.md written before this has no blockers section, so nothing is held back
-    until /tracker-setup is run again.
+11. **Sync is TypeScript, not an agent** (a deliberate change to SPEC.md's "sync follows tracker.md"). The mod
+    runs three shell commands from tracker.md (`## List the tickets waiting to be worked`, `## List the tickets
+    that are done`, `## List the blockers`), each printing JSON in a fixed shape, and `src/sync.ts` upserts,
+    holds back blocked tickets (removing them while `new` or `ready`) and marks done ones done. Epics are
+    filtered by the waiting command itself. A tracker.md missing any of the three fails every pass with "run
+    /tracker-setup", so a tracker.md written before this must be set up again. A tracker reachable only through
+    an MCP server, with no CLI or HTTP API, cannot be synced this way.
