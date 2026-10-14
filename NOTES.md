@@ -13,3 +13,13 @@ Things SPEC.md does not settle. Built without them; each needs Daniel's call.
    prompt (create, then remove), no mod code. Keep it?
 4. **Defaults for readiness.md, rubric.md and routing.md** ship in `skills/tracker-setup/defaults/` and
    /tracker-setup copies them into `.claude/pipeline/` when absent. SPEC.md does not say who writes them.
+5. **The loop's agents' completion notices are dropped** (`prompt.submit`, origin `task-notification`, an agent
+   described `pipeline …`). Without it every sync and implementer that finishes starts a main-thread turn, which
+   SPEC.md says the loop must never do. You still see a one-line notice. Sync runs every pass, so that is one
+   line every 5 minutes. Fine, or sync less often?
+6. **An in_progress ticket with no live implementer goes to needs_human.** Otherwise a crashed or killed
+   implementer (or a session restart) leaves it in_progress and the loop never spawns again.
+7. **Background agents and permissions.** Under auto mode the first timer-driven spawn in the probe was denied
+   ("gave no verdict": no user request behind it); the loop logs the deny and retries next pass. In other modes
+   the implementer's `git push` / `gh pr create` may raise permission prompts in your session. SPEC.md assumes
+   neither. Which permission setup should the loop expect?

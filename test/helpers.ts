@@ -1,10 +1,10 @@
 import { execFile } from 'node:child_process'
-import { mkdtempSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { ProcessRunResult } from 'claude-code'
-import { type Run, SCHEMA, sql } from '../src/store.ts'
+import { DB, type Run, SCHEMA, sql } from '../src/store.ts'
 
 /** `$.process.run` over child_process. */
 export const run: Run = async (argv, init) => {
@@ -22,4 +22,14 @@ export const freshDb = async () => {
   const db = join(mkdtempSync(join(tmpdir(), 'pipeline-')), 'pipeline.db')
   await sql(run, db, SCHEMA)
   return db
+}
+
+/** A project set up as /tracker-setup leaves it, with the schema applied; `run` already has it as cwd. */
+export const freshProject = async () => {
+  const root = mkdtempSync(join(tmpdir(), 'pipeline-project-'))
+  mkdirSync(join(root, '.claude/pipeline'), { recursive: true })
+  for (const name of ['tracker', 'readiness', 'rubric', 'routing']) writeFileSync(join(root, `.claude/pipeline/${name}.md`), `# ${name}\n`)
+  const inRoot: Run = (argv, init) => run(argv, { cwd: root, ...init })
+  await sql(inRoot, DB, SCHEMA)
+  return { run: inRoot, db: DB }
 }
