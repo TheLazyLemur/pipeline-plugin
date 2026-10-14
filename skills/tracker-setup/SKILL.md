@@ -18,6 +18,21 @@ sync, and the instructions its agents follow to talk to the tracker. No adapter 
    first fenced code block under its own heading, spelled exactly as below, and is run with `sh -c` from the
    project root. A tracker.md missing any of them fails every loop pass with "run /tracker-setup".
 
+   **Pick the shape.** When the tracker or the PR host is reached through an API (Jira, GitHub, Bitbucket, Linear),
+   write one script, `.claude/pipeline/tracker.sh`, with one subcommand per section below: `waiting`, `done`,
+   `blockers`, `merged`, `mark-done`, plus `read`, `move`, `comment` and `link-pr` for the agents. Each section
+   of tracker.md is then one line calling the script, for example `.claude/pipeline/tracker.sh merged "$1"`.
+   Auth, pagination, JSON shaping and transitions live in tested code, and the agents call one known command
+   instead of composing API requests. If the project already has helpers for that tracker (a Jira client, a
+   `gh` wrapper, an API library), call them from the script instead of writing new requests. For a local
+   tracker such as a SQLite file, inline commands in tracker.md are fine and no script is needed.
+
+   A script needs contract tests, in the project's own test setup, that run each subcommand and check the output
+   shape the mod relies on, without a live loop: the JSON fields of `waiting`, `done` and `blockers`,
+   `{"merged": true|false}` from `merged`, and `mark-done` succeeding on an already-done ticket and failing on
+   a bad id. Stub or record the API responses; the tests must not need to change a real ticket. They must pass
+   before tracker.md is saved.
+
    The three sync commands each print one JSON array (or nothing, meaning none), with exactly these fields:
    - `## List the tickets waiting to be worked` prints `[{"id", "title", "url", "body"}]`, `url` null when there is
      none, `body` the description followed by the acceptance criteria (triage judges the ticket from it). Only work items one PR can finish: filter out epics and other parent or container types in the
@@ -46,7 +61,7 @@ sync, and the instructions its agents follow to talk to the tracker. No adapter 
    - linking a PR to a ticket,
    - and the status mapping from step 2.
 
-   Credentials never go in the file: name the env var or the tool's own login instead.
+   Credentials never go in tracker.md or the script: name the env var or the tool's own login instead.
 4. **Copy the defaults** `readiness.md`, `rubric.md` and `routing.md` from this skill's `defaults/` folder into
    `.claude/pipeline/`, skipping any that already exist. Show them to the user and offer to adjust them.
 5. Add `.claude/pipeline/pipeline.db` to the project's `.gitignore`.
