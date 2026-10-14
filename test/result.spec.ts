@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { AgentInfo } from 'claude-code'
-import { report, stop } from '../src/result.ts'
+import { dbRefusal, report, stop } from '../src/result.ts'
 import { sql } from '../src/store.ts'
 import { freshDb, run } from './helpers.ts'
 
@@ -266,4 +266,61 @@ test('a reviewer may stop without reporting', async () => {
   // then
   // ... it is neither blocked nor logged
   assert.deepEqual(s, {})
+})
+
+test('a pipeline agent writing pipeline.db with sqlite3 is refused and pointed at report_result', () => {
+  // given
+  // ... a verifier's Bash command that writes pipeline.db
+  const input = { command: `sqlite3 .claude/pipeline/pipeline.db "update tickets set status = 'pr_open'"` }
+
+  // when
+  // ... the call is checked
+  const deny = dbRefusal(verifier, 'pipeline', 'Bash', input)
+
+  // then
+  // ... it is refused with a reason naming report_result
+  assert.match(String(deny), /report_result/)
+})
+
+test('a pipeline agent writing tracker.db runs', () => {
+  // given
+  // ... an implementer's Bash command that moves the tracker status
+  const input = { command: `sqlite3 .claude/pipeline/tracker.db "update tickets set status = 'in_review' where id = 1"` }
+
+  // when
+  // ... the call is checked
+  const deny = dbRefusal(implementer, 'pipeline', 'Bash', input)
+
+  // then
+  // ... it runs
+  assert.equal(deny, undefined)
+})
+
+test('an agent the pipeline did not spawn may touch pipeline.db', () => {
+  // given
+  // ... another plugin's agent, described like a pipeline agent, reading pipeline.db
+  const other = { ...implementer, spawnedBy: 'other' } as AgentInfo
+  const input = { command: 'sqlite3 .claude/pipeline/pipeline.db "select * from tickets"' }
+
+  // when
+  // ... the call is checked
+  const deny = dbRefusal(other, 'pipeline', 'Bash', input)
+
+  // then
+  // ... it runs
+  assert.equal(deny, undefined)
+})
+
+test('a pipeline agent reading pipeline.db with a tool other than Bash runs', () => {
+  // given
+  // ... an implementer's Read of pipeline.db
+  const input = { file_path: '/repo/.claude/pipeline/pipeline.db' }
+
+  // when
+  // ... the call is checked
+  const deny = dbRefusal(implementer, 'pipeline', 'Read', input)
+
+  // then
+  // ... it runs
+  assert.equal(deny, undefined)
 })
