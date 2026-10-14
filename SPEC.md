@@ -59,13 +59,15 @@ A waiting ticket with a blocker that is not done is held: sync does not insert i
 `/pipeline-status` lists held tickets live from the blockers command.
 
 ### The implementer's result
-The implementer ends its answer with `PR: <url>` or `BLOCKED: <question>` as the last line and does not touch
-the database. A `turn.complete` hook on the loop's own `pipeline <ticket_id>` agents parses the line
-(`src/result.ts`) and writes the ticket: `pr_url` and `pr_open`, or `question` and `needs_human`. Any other ending
-goes to needs_human with the end of the answer quoted. The write applies only while the ticket is still
-`in_progress`, so the orphan check, which covers only an implementer that never completes a turn (crash, kill,
-session restart), wins if it ran first. The implementer works in its own git worktree, so it never switches
-branches in the checkout you are using.
+The mod registers a `report_result` tool (`mcp__pipeline__report_result`, schema `{status: "pr_open" | "blocked",
+pr_url?, question?}`). The implementer finishes by calling it and never touches the database. Its `tool.call` hook
+(`src/result.ts`) refuses any caller that is not one of the loop's own `pipeline <ticket_id>` agents, and a call
+missing `pr_url` for pr_open or `question` for blocked. It writes the ticket: `pr_url` and `pr_open`, or `question`
+and `needs_human`. The write applies only while the ticket is still `in_progress`, and a log line is written only
+when a row changed. A `classic.SubagentStop` hook blocks an implementer whose ticket is still `in_progress` from
+stopping once, with a reason telling it to call the tool; if it stops again, the ticket goes to needs_human. The
+orphan check covers an implementer that crashes or is killed. The implementer works in its own git worktree, so it
+never switches branches in the checkout you are using.
 
 ### Permissions and notices
 The loop's agents run unattended. A `tool.check` hook allows every tool call of the `pipeline <ticket>` agents
@@ -125,7 +127,7 @@ Applied by Haiku at triage, not by a parser, and only to sonnet, opus or fable, 
 
 ### Implementers (`agents/implementer-sonnet.md`, `-opus.md`, `-fable.md`)
 Spawned by the loop for the routed model. Each reads the ticket, works in its own worktree, implements it, runs the
-tests, opens its own PR and links it on the tracker using tracker.md. It ends with the final line described above.
+tests, opens its own PR and links it on the tracker using tracker.md. It finishes by calling `report_result`, described above.
 
 ### `/learn` (skill)
 Finds PRs in SQLite with learned = false. For each, reads the review comments and works through them

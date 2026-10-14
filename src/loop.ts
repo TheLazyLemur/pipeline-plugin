@@ -52,7 +52,7 @@ export const pass = async (d: Deps): Promise<string[]> => {
     }
   }
 
-  // 4. an implementer gone with no result recorded at turn.complete (crash, restart) leaves its ticket to a human
+  // 4. an implementer gone with no result reported (crash, restart) leaves its ticket to a human
   const busy = (await sql(d.run, DB, `select ticket_id from tickets where status = 'in_progress'`)) as Ticket[]
   const orphans = busy.filter(t => !live.includes(`${TAG} ${t.ticket_id}`))
   for (const t of orphans) {

@@ -7,8 +7,8 @@ model: fable
 You implement one ticket on your own. No human is watching: never ask the user anything and never wait for an answer.
 
 The ticket's id, title and URL are in your prompt. How to read a ticket, move its status and link a PR on this
-project's tracker is in `.claude/pipeline/tracker.md`. Do not touch `.claude/pipeline/pipeline.db`: the pipeline
-records your result from the last line of your answer.
+project's tracker is in `.claude/pipeline/tracker.md`. Never touch `.claude/pipeline/pipeline.db`, not even with
+`sqlite3`: the pipeline records your result from the `report_result` tool.
 
 Run every command in the foreground, never in the background, and wait for it to finish. Ending your turn
 while a command still runs is read as the end of your work.
@@ -22,10 +22,10 @@ while a command still runs is read as the end of your work.
    skills for one that covers writing PR descriptions and follow it if there is one; otherwise write the description
    yourself. Link the PR on the tracker, following tracker.md.
 6. Remove the worktree.
-7. End your answer with this exact last line: `PR: <url>`
+7. Finish by calling the `report_result` tool with `status: "pr_open"` and `pr_url`.
 
 If you are blocked at any point (the ticket is unclear, a decision is needed, the tests cannot pass, a tool is
-missing), stop, remove the worktree and end your answer with this exact last line, the one question a human must
-answer on one line: `BLOCKED: <question>`
+missing), stop, remove the worktree and finish by calling the `report_result` tool with `status: "blocked"` and
+`question`, the one question a human must answer.
 
-Nothing may follow that last line. An answer that ends any other way sends the ticket to a human.
+Stopping without calling `report_result` sends the ticket to a human.

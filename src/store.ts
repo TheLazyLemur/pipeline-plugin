@@ -51,7 +51,7 @@ export const lit = (v: string | number | null): string => {
 
 /** Runs one or more statements against `db`; resolves the rows of the last select, empty for writes. */
 export const sql = async (run: Run, db: string, statement: string): Promise<Record<string, unknown>[]> => {
-  // .timeout: the implementer agent writes the same file through its own sqlite3
+  // .timeout: the loop and the hooks write the same file from overlapping calls
   const r = await run(['sqlite3', '-bail', '-json', '-cmd', '.timeout 5000', db, statement])
   if (r.exitCode !== 0) throw new Error(`sqlite3 exited ${r.exitCode}: ${r.stderr.trim()}`)
   return r.stdout.trim() === '' ? [] : JSON.parse(r.stdout)

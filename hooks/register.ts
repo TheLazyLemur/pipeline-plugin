@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
 import { TAG, pass } from '../src/loop.ts'
-import { record } from '../src/result.ts'
+import { REPORT_TOOL, report, stop, ticketOf } from '../src/result.ts'
 import { DB } from '../src/store.ts'
 
 const FIRST_MS = 10_000
@@ -8,6 +8,8 @@ const EVERY_MS = 5 * 60_000
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
+    // awaited before next, so the tool is listed by the implementers' first turn
+    await $.tool.register(REPORT_TOOL)
     const started = await next(e)
     const root = await $.session.root()
     let isRunning = false
@@ -35,20 +37,28 @@ export const register: Register = on => {
     return started
   })
 
-  // an implementer's final line is its result; one that never completes a turn is left to the orphan rule in pass
-  on('turn.complete', async ($, e, next) => {
-    const done = await next(e)
-    if (e.agentId === undefined) return done
+  // the implementer's result; refused for any other caller, written only while its ticket is in_progress
+  on('tool.call', async ($, e, next) => {
+    if (e.tool !== `mcp__${$.plugin.name}__${REPORT_TOOL.name}`) return next(e)
     const agent = (await $.agent.list()).find(a => a.id === e.agentId)
-    if (agent?.spawnedBy !== $.plugin.name || !agent.description.startsWith(`${TAG} `)) return done
-    const ticketId = agent.description.slice(TAG.length + 1)
     try {
       const root = await $.session.root()
-      $.ui.log(await record((argv, init) => $.process.run(argv, { cwd: root, ...init }), DB, ticketId, e.answer))
+      const line = await report((argv, init) => $.process.run(argv, { cwd: root, ...init }), DB, $.plugin.name, agent, e as Record<string, unknown>)
+      if (line !== null) $.ui.log(line)
+      return { result: line === null ? 'Not recorded: the ticket is no longer in progress.' : 'Recorded.' }
     } catch (err) {
-      $.ui.log(`recording ${ticketId} failed: ${(err as Error).message}`)
+      return { deny: (err as Error).message }
     }
-    return done
+  })
+
+  // an implementer must report before it stops: blocked once, then its ticket goes to a human
+  on('classic.SubagentStop', async ($, e, next) => {
+    const done = await next(e)
+    const agent = (await $.agent.list()).find(a => a.id === e.agent_id)
+    const root = await $.session.root()
+    const s = await stop((argv, init) => $.process.run(argv, { cwd: root, ...init }), DB, $.plugin.name, agent, e.stop_hook_active)
+    if (s.log !== undefined) $.ui.log(s.log)
+    return s.block === undefined ? done : { ...done, block: s.block }
   })
 
   // the loop's agents run unattended: a call that would prompt is allowed; deny rules and an org ceiling still stand
@@ -56,8 +66,7 @@ export const register: Register = on => {
     const verdict = await next(e)
     if (verdict.decision !== 'ask' || e.agentId === undefined || (e.ceiling !== undefined && e.ceiling !== 'allow')) return verdict
     const agent = (await $.agent.list()).find(a => a.id === e.agentId)
-    const isOurs = agent?.spawnedBy === $.plugin.name && agent.description.startsWith(`${TAG} `)
-    return isOurs ? { decision: 'allow', reason: `${$.plugin.name} allows its own agents' calls` } : verdict
+    return ticketOf(agent, $.plugin.name) !== null ? { decision: 'allow', reason: `${$.plugin.name} allows its own agents' calls` } : verdict
   })
 
   // the loop's agents finishing must not start a turn on the main thread
