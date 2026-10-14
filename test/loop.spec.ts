@@ -169,7 +169,11 @@ test('new tickets are triaged in the pass', async () => {
   const { d } = deps(run, [live('pipeline T-1')])
   const prompts: string[] = []
   const complete = d.complete
-  d.complete = r => (prompts.push(r.prompt), complete(r))
+  d.complete = r => {
+    assert(typeof r.prompt === 'string')
+    prompts.push(r.prompt)
+    return complete(r)
+  }
 
   // when
   // ... a pass runs

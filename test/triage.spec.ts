@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { test } from 'node:test'
 import type { ModelCompleteRequest, ModelCompleteResult } from 'claude-code'
 import { sql } from '../pipeline-agents/src/store.ts'
@@ -69,6 +70,7 @@ test('the ticket body reaches the Haiku prompt', async () => {
   await sql(run, db, `insert into tickets (ticket_id, title) values ('T-1', 'Add login')`)
   const prompts: string[] = []
   const complete = async (r: ModelCompleteRequest) => {
+    assert(typeof r.prompt === 'string')
     prompts.push(r.prompt)
     return { isAnswered: true, text: '{"ready": true, "question": null, "difficulty": 2, "confidence": 0.9, "model": "sonnet", "reason": "clear"}' } as ModelCompleteResult
   }
@@ -80,13 +82,13 @@ test('the ticket body reaches the Haiku prompt', async () => {
   // then
   // ... Haiku is shown the body
   assert.equal(prompts.length, 1)
-  assert.match(prompts[0], /Google sign-in\.\n- a user can sign in with Google/)
+  assert.match(prompts.join(), /Google sign-in\.\n- a user can sign in with Google/)
 })
 
 test('the review threshold is read from routing.md, 3 when the line is missing, and a bad one fails', () => {
   // given
   // ... the default routing.md, one with the threshold raised, one written before it existed, and one with a typo
-  const routing = readFileSync(new URL('../skills/tracker-setup/defaults/routing.md', import.meta.url), 'utf8')
+  const routing = readFileSync(join(import.meta.dirname, '../skills/tracker-setup/defaults/routing.md'), 'utf8')
 
   // when
   // ... each is read

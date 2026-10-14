@@ -72,9 +72,18 @@ lists held tickets and what holds each.
 ## Tests
 
 ```sh
-npm test              # unit tests, under node
+npm install           # once per checkout, worktrees included
+npm test              # typecheck, then unit tests under node
+npm run typecheck     # tsc over both plugins
 npm run test:plugin   # claude plugin test pipeline-agents
+npm run types:vendor  # refresh types/vendor from .claude-plugin/types/
 ```
+
+Node strips types without checking them, so `npm test` runs `tsc` first. The engine writes its types to
+`.claude-plugin/types/` each time it loads the plugin, which is gitignored and absent in a fresh worktree, so the
+tsconfig files read a committed snapshot in `types/vendor/` instead. After a Claude Code update, run
+`npm run types:vendor` in a checkout the engine has loaded. The snapshot leaves out `claude-code-mcp`: it lists the
+MCP servers of the session that wrote it, not the engine.
 
 The plugin test (`pipeline-agents/test/report-result.test.ts`) loads `pipeline-agents` with a stand-in for the loop
 named `pipeline`, and checks that an agent `pipeline` spawned from its timer gets its `report_result` call answered,
