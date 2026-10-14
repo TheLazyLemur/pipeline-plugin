@@ -53,11 +53,11 @@ export const parseVerdict = (text: string): Verdict => {
 }
 
 /** Triages one ticket with Haiku and writes the verdict, unless the ticket left `new` meanwhile. */
-export const triage = async (run: Run, complete: Complete, db: string, guides: Guides, t: Pick<Ticket, 'ticket_id' | 'title' | 'url'>) => {
+export const triage = async (run: Run, complete: Complete, db: string, guides: Guides, t: Pick<Ticket, 'ticket_id' | 'title' | 'url' | 'body'>) => {
   const r = await complete({
     model: 'haiku',
     system: system(guides),
-    prompt: `Ticket ${t.ticket_id}: ${t.title}\n${t.url ?? ''}`,
+    prompt: `Ticket ${t.ticket_id}: ${t.title}\n${t.url ?? ''}\n\n${t.body ?? '(no description)'}`,
     effort: 'low',
     timeoutMs: 60_000,
   })

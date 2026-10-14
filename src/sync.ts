@@ -50,9 +50,10 @@ export const sync = async (run: Run, db: string, tracker: string) => {
     const ticket = id(WAITING, t)
     if (typeof t.title !== 'string') bad(WAITING, t, 'title')
     if (typeof t.url !== 'string' && t.url !== null) bad(WAITING, t, 'url')
+    if (typeof t.body !== 'string' && t.body !== null) bad(WAITING, t, 'body')
     if (blocked.has(ticket)) continue
-    statements.push(`insert into tickets (ticket_id, title, url) values (${lit(ticket)}, ${lit(t.title as string)}, ${lit(t.url as string | null)})
-      on conflict (ticket_id) do update set title = excluded.title, url = excluded.url;`)
+    statements.push(`insert into tickets (ticket_id, title, url, body) values (${lit(ticket)}, ${lit(t.title as string)}, ${lit(t.url as string | null)}, ${lit(t.body as string | null)})
+      on conflict (ticket_id) do update set title = excluded.title, url = excluded.url, body = excluded.body;`)
   }
   // a ticket that became blocked leaves until its blockers are done, unless work on it has started
   for (const ticket of blocked) statements.push(`delete from tickets where ticket_id = ${lit(ticket)} and status in ('new', 'ready');`)

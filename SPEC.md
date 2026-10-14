@@ -51,6 +51,7 @@ Holds pipeline status. The tracker owns the ticket itself; SQLite holds our fiel
 |---|---|
 | ticket_id | the tracker's id |
 | title, url | copied from the tracker |
+| body | the description plus acceptance criteria, copied from the tracker for triage |
 | status | new, needs_human, ready, in_progress, pr_open, done |
 | question | what it needs from you, when needs_human |
 | difficulty | 1-5 |

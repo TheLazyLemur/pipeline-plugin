@@ -17,8 +17,8 @@ sync, and the instructions its agents follow to talk to the tracker. No adapter 
 3. **Write `.claude/pipeline/tracker.md`.** The pipeline's mod runs three sync commands itself. Each goes in the
    first fenced code block under its own heading, spelled exactly as below, and is run with `sh -c` from the
    project root. Each must print one JSON array (or nothing, meaning none), with exactly these fields:
-   - `## List the tickets waiting to be worked` prints `[{"id", "title", "url"}]`, `url` null when there is
-     none. Only work items one PR can finish: filter out epics and other parent or container types in the
+   - `## List the tickets waiting to be worked` prints `[{"id", "title", "url", "body"}]`, `url` null when there is
+     none, `body` the description followed by the acceptance criteria (triage judges the ticket from it). Only work items one PR can finish: filter out epics and other parent or container types in the
      command itself.
    - `## List the tickets that are done` prints `[{"id"}]`, every ticket in a done status.
    - `## List the blockers` prints `[{"id", "blocked_by", "blocker_done"}]`, one row per link from a waiting

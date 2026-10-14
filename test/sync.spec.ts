@@ -25,7 +25,7 @@ test('waiting tickets are added as new and existing rows keep their status', asy
   // ... one ticket already ready under an old title, and the tracker listing it and a new one
   const db = await freshDb()
   await sql(run, db, `insert into tickets (ticket_id, title, status, model) values ('1', 'old', 'ready', 'opus')`)
-  const md = tracker([{ id: 1, title: 'renamed', url: null }, { id: 2, title: 'two', url: 'https://t/2' }], [], [])
+  const md = tracker([{ id: 1, title: 'renamed', url: null, body: null }, { id: 2, title: 'two', url: 'https://t/2', body: 'the body' }], [], [])
 
   // when
   // ... sync runs
@@ -33,9 +33,9 @@ test('waiting tickets are added as new and existing rows keep their status', asy
 
   // then
   // ... the existing row has the new title and the same status, the new one is new
-  assert.deepEqual(await sql(run, db, `select ticket_id, title, url, status from tickets order by rowid`), [
-    { ticket_id: '1', title: 'renamed', url: null, status: 'ready' },
-    { ticket_id: '2', title: 'two', url: 'https://t/2', status: 'new' },
+  assert.deepEqual(await sql(run, db, `select ticket_id, title, url, body, status from tickets order by rowid`), [
+    { ticket_id: '1', title: 'renamed', url: null, body: null, status: 'ready' },
+    { ticket_id: '2', title: 'two', url: 'https://t/2', body: 'the body', status: 'new' },
   ])
 })
 
@@ -44,7 +44,7 @@ test('a waiting ticket with an unfinished blocker is not pulled in', async () =>
   // ... two waiting tickets, one blocked by an open ticket and one by a done ticket
   const db = await freshDb()
   const md = tracker(
-    [{ id: 1, title: 'one', url: null }, { id: 2, title: 'two', url: null }],
+    [{ id: 1, title: 'one', url: null, body: null }, { id: 2, title: 'two', url: null, body: null }],
     [],
     [{ id: 1, blocked_by: 9, blocker_done: false }, { id: 2, blocked_by: 8, blocker_done: true }],
   )
@@ -63,7 +63,7 @@ test('a ticket that became blocked is removed while new or ready, and kept once 
   // ... three blocked tickets: one new, one ready, one in progress
   const db = await freshDb()
   await sql(run, db, `insert into tickets (ticket_id, title, status) values ('1', 'one', 'new'), ('2', 'two', 'ready'), ('3', 'three', 'in_progress')`)
-  const waiting = [1, 2, 3].map(id => ({ id, title: `t${id}`, url: null }))
+  const waiting = [1, 2, 3].map(id => ({ id, title: `t${id}`, url: null, body: null }))
   const md = tracker(waiting, [], [1, 2, 3].map(id => ({ id, blocked_by: 9, blocker_done: 0 })))
 
   // when

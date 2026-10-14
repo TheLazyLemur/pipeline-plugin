@@ -48,16 +48,20 @@ test('new tickets are triaged in the pass', async () => {
   // given
   // ... a new ticket and an implementer already running
   const { run, db } = await freshProject()
-  await sql(run, db, `insert into tickets (ticket_id, title, status, model) values ('T-1', 'one', 'in_progress', 'opus'), ('T-2', 'two', 'new', null)`)
+  await sql(run, db, `insert into tickets (ticket_id, title, status, model, body) values ('T-1', 'one', 'in_progress', 'opus', null), ('T-2', 'two', 'new', null, 'the body')`)
   const { d } = deps(run, [live('pipeline T-1')])
+  const prompts: string[] = []
+  const complete = d.complete
+  d.complete = r => (prompts.push(r.prompt), complete(r))
 
   // when
   // ... a pass runs
   await pass(d)
 
   // then
-  // ... the new ticket carries Haiku's verdict
+  // ... the new ticket carries Haiku's verdict, judged with its body
   assert.deepEqual(await sql(run, db, `select status, model from tickets where ticket_id = 'T-2'`), [{ status: 'ready', model: 'opus' }])
+  assert.match(prompts.join(), /the body/)
 })
 
 test('nothing is spawned while an implementer is running', async () => {
