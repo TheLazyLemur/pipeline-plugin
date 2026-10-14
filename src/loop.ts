@@ -13,9 +13,14 @@ export type Deps = {
   agents: () => Promise<AgentInfo[]>
   /** `$.plugin.name`, which namespaces the implementer agents. */
   plugin: string
+  /** `$.session.id()`: the owner this session's claims carry. */
+  session: string
 }
 
 const LIVE: readonly string[] = ['pending', 'running', 'waiting']
+
+/** An owner unseen for 3 pass intervals (5 minutes each) is taken as stopped. */
+const STALE = `(owner_seen is null or owner_seen < datetime('now', '-15 minutes'))`
 
 /** The agents a stage starts. */
 const STARTS: Record<Exclude<Stage, 'implement'>, readonly Role[]> = { review: ['reviewer-spec', 'reviewer-quality'], verify: ['verifier'], fix: ['fixer'] }
@@ -48,7 +53,7 @@ const read = async (run: Run, name: string) => {
   return r.exitCode === 0 ? r.stdout : null
 }
 
-/** One pass: mark merged PRs done, sync, triage every new ticket, move each in_progress ticket's stage on, spawn the implementer for the next ready one if none is in progress. Resolves what to log. */
+/** One pass: mark merged PRs done, sync, triage every new ticket, move each in_progress ticket this session owns on, send those of a stopped session to a human, claim and spawn the implementer for the next ready one if none is in progress. Resolves what to log. */
 export const pass = async (d: Deps): Promise<string[]> => {
   const [tracker, readiness, rubric, routing] = await Promise.all([
     read(d.run, 'tracker'),
@@ -58,6 +63,9 @@ export const pass = async (d: Deps): Promise<string[]> => {
   ])
   if (tracker === null || readiness === null || rubric === null || routing === null) return [`no .claude/pipeline setup here; run /tracker-setup`]
   await migrate(d.run, DB)
+  // heartbeat first, so a pass that fails later still shows this session alive; a ticket from before owners is
+  // adopted, so the stage rules below apply to it as they did then
+  await sql(d.run, DB, `update tickets set owner = coalesce(owner, ${lit(d.session)}), owner_seen = datetime('now') where status = 'in_progress' and (owner is null or owner = ${lit(d.session)})`)
   const log: string[] = []
   const live = (await d.agents()).filter(a => LIVE.includes(a.status))
 
@@ -78,14 +86,23 @@ export const pass = async (d: Deps): Promise<string[]> => {
     }
   }
 
-  // 4. a stage with no agent of its ticket still live moves on: a stage report_result entered gets its agents started
+  // 4. only the owner moves a ticket on: $.agent.list() sees this session's agents alone. Another session's ticket
+  // counts toward the one-at-a-time limit while its owner is seen, and goes to a human once it is not.
+  // A stage with no agent of its ticket still live moves on: a stage report_result entered gets its agents started
   // here, since only this plugin's spawns are heard by pipeline-agents (docs/adr/0001); finished reviewers hand over
   // to the verifier; any other agent gone with no result reported (crash, restart) leaves its ticket to a human
-  const busy = (await sql(d.run, DB, `select ticket_id, stage, started from tickets where status = 'in_progress' order by rowid`)) as Ticket[]
+  const busy = (await sql(d.run, DB, `select ticket_id, stage, started, owner, ${STALE} as stale from tickets where status = 'in_progress' order by rowid`)) as (Ticket & { stale: 0 | 1 })[]
   const working = new Set(live.map(a => agentOf(a, d.plugin)?.ticket))
   let waiting = 0
   for (const t of busy) {
-    if (working.has(t.ticket_id)) waiting++
+    // the heartbeat adopted every ownerless one, and a claim always sets the owner
+    if (t.owner === null) throw new Error(`${t.ticket_id} is in_progress with no owner`)
+    if (t.owner !== d.session && t.stale === 0) waiting++
+    else if (t.owner !== d.session) {
+      const question = `The session that owned this ticket (${t.owner}) stopped, so whatever agent it was running is gone. Check the branch and any PR, then send the ticket back to new or set it pr_open.`
+      const moved = await sql(d.run, DB, `update tickets set status = 'needs_human', question = ${lit(question)} where ticket_id = ${lit(t.ticket_id)} and status = 'in_progress' and owner = ${lit(t.owner)} and ${STALE} returning ticket_id`)
+      if (moved.length > 0) log.push(`${t.ticket_id} needs you: its owning session stopped`)
+    } else if (working.has(t.ticket_id)) waiting++
     else if (t.started === 0 && t.stage !== null && t.stage !== 'implement') {
       waiting++
       log.push(await start(d, t.ticket_id, t.stage))
@@ -111,7 +128,15 @@ export const pass = async (d: Deps): Promise<string[]> => {
   if (!MODELS.includes(next.model as (typeof MODELS)[number])) throw new Error(`${next.ticket_id} is ready with no routed model: ${next.model}`)
   if (next.difficulty === null) throw new Error(`${next.ticket_id} is ready with no difficulty`)
   const draft = next.difficulty >= reviewFrom(routing)
-  await sql(d.run, DB, `update tickets set status = 'in_progress', stage = 'implement', started = 1 where ticket_id = ${lit(next.ticket_id)} and status = 'ready'`)
+  // the claim: one statement, so of passes racing (in this session or another) only one gets the row back, and only
+  // while nothing is in_progress
+  const claimed = await sql(
+    d.run,
+    DB,
+    `update tickets set status = 'in_progress', stage = 'implement', started = 1, owner = ${lit(d.session)}, owner_seen = datetime('now')
+     where ticket_id = ${lit(next.ticket_id)} and status = 'ready' and not exists (select 1 from tickets where status = 'in_progress') returning ticket_id`,
+  )
+  if (claimed.length === 0) return log
   const s = await d.spawn({
     description: `${TAG} ${next.ticket_id}`,
     subagentType: `${d.plugin}:implementer-${next.model}`,

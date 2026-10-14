@@ -12,6 +12,8 @@ export const register: Register = on => {
     const started = await next(e)
     if ($.plugin.name !== LOOP_PLUGIN) throw new Error(`the loop plugin must be named ${LOOP_PLUGIN}: pipeline-agents recognises agents by it`)
     const root = await $.session.root()
+    // read once, so every claim and heartbeat of this loop carries the same owner
+    const session = await $.session.id()
     let isRunning = false
     const tick = async () => {
       if (isRunning) return
@@ -23,6 +25,7 @@ export const register: Register = on => {
           spawn: args => $.agent.spawn(args),
           agents: () => $.agent.list(),
           plugin: $.plugin.name,
+          session,
         })
         for (const line of lines) $.ui.log(line)
       } catch (err) {

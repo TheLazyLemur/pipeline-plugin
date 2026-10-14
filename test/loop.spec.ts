@@ -11,8 +11,8 @@ import { freshProject } from './helpers.ts'
 
 const live = (description: string) => ({ description, status: 'running', spawnedBy: 'pipeline' }) as AgentInfo
 
-/** Deps over a project, recording every spawn; `refuse` denies them all. */
-const deps = (run: Run, agents: AgentInfo[], refuse = false) => {
+/** Deps over a project for session `session`, recording every spawn; `refuse` denies them all. */
+const deps = (run: Run, agents: AgentInfo[], refuse = false, session = 's1') => {
   const spawned: AgentSpawnArgs[] = []
   const d: Deps = {
     run,
@@ -24,6 +24,7 @@ const deps = (run: Run, agents: AgentInfo[], refuse = false) => {
     },
     agents: async () => agents,
     plugin: 'pipeline',
+    session,
   }
   return { d, spawned }
 }
@@ -363,7 +364,91 @@ test('a database made before stages gains the column on the first pass and its r
   await pass(deps(run, []).d)
 
   // then
-  // ... the column exists, and the ticket was handled as an implementer gone without a result
-  assert.deepEqual(await sql(run, db, `select stage, status from tickets`), [{ stage: null, status: 'needs_human' }])
+  // ... the columns exist, and the ticket was adopted and handled as an implementer gone without a result
+  assert.deepEqual(await sql(run, db, `select stage, status, owner, owner_seen is not null as seen from tickets`), [{ stage: null, status: 'needs_human', owner: 's1', seen: 1 }])
   assert.match(String((await sql(run, db, `select question from tickets`))[0]?.question), /The implementer stopped/)
+})
+
+test('two passes racing for one ready ticket spawn one implementer', async () => {
+  // given
+  // ... one ready ticket, and session s1 whose claim runs only after session s2's whole pass has run
+  const { run, db } = await freshProject()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, model, difficulty) values ('T-1', 'one', 'ready', 'sonnet', 1)`)
+  const s2 = deps(run, [], false, 's2')
+  let raced = false
+  const racing: Run = async (argv, init) => {
+    if (!raced && argv.some(a => a.includes("set status = 'in_progress'"))) {
+      raced = true
+      await pass(s2.d)
+    }
+    return run(argv, init)
+  }
+  const s1 = deps(racing, [])
+
+  // when
+  // ... s1 runs a pass, s2 claiming the ticket between s1's select and s1's claim
+  await pass(s1.d)
+
+  // then
+  // ... only s2 spawned an implementer, and the ticket is s2's
+  assert.deepEqual(s1.spawned, [])
+  assert.deepEqual(s2.spawned.map(s => s.description), ['pipeline T-1'])
+  assert.deepEqual(await sql(run, db, `select status, owner from tickets`), [{ status: 'in_progress', owner: 's2' }])
+})
+
+test("another session's ticket whose owner was seen recently is left alone and holds the next ready one", async () => {
+  // given
+  // ... a ticket of session s2 at stage review seen a minute ago, a ready ticket, and no agent live in session s1
+  const { run, db } = await freshProject()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, stage, model, difficulty, pr_url, owner, owner_seen)
+    values ('T-1', 'one', 'in_progress', 'review', 'opus', 3, 'https://git/pr/1', 's2', datetime('now', '-1 minute'))`)
+  await sql(run, db, `insert into tickets (ticket_id, title, status, model, difficulty) values ('T-2', 'two', 'ready', 'sonnet', 1)`)
+  const { d, spawned } = deps(run, [])
+
+  // when
+  // ... s1 runs a pass
+  await pass(d)
+
+  // then
+  // ... nothing is spawned, s2's ticket stays at review with s2, and the ready ticket waits
+  assert.deepEqual(spawned, [])
+  assert.deepEqual(await sql(run, db, `select ticket_id, status, stage, owner from tickets order by rowid`), [
+    { ticket_id: 'T-1', status: 'in_progress', stage: 'review', owner: 's2' },
+    { ticket_id: 'T-2', status: 'ready', stage: null, owner: null },
+  ])
+})
+
+test('a ticket whose owning session has not been seen for 15 minutes goes to needs_human', async () => {
+  // given
+  // ... a ticket of session s2 last seen 16 minutes ago
+  const { run, db } = await freshProject()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, stage, model, owner, owner_seen)
+    values ('T-1', 'one', 'in_progress', 'implement', 'opus', 's2', datetime('now', '-16 minutes'))`)
+
+  // when
+  // ... session s1 runs a pass
+  const log = await pass(deps(run, []).d)
+
+  // then
+  // ... it waits on a human, with a question saying its owning session stopped
+  const [row] = await sql(run, db, `select status, question from tickets`)
+  assert.equal(row?.status, 'needs_human')
+  assert.match(String(row?.question), /The session that owned this ticket \(s2\) stopped/)
+  assert.match(log.join('\n'), /T-1 needs you: its owning session stopped/)
+})
+
+test('a pass stamps owner_seen on the tickets its session owns', async () => {
+  // given
+  // ... a ticket of session s1 last seen 10 minutes ago, with its implementer live
+  const { run, db } = await freshProject()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, model, owner, owner_seen)
+    values ('T-1', 'one', 'in_progress', 'opus', 's1', datetime('now', '-10 minutes'))`)
+
+  // when
+  // ... s1 runs a pass
+  await pass(deps(run, [live('pipeline T-1')]).d)
+
+  // then
+  // ... it was seen within the last minute and is still in progress
+  assert.deepEqual(await sql(run, db, `select status, owner_seen > datetime('now', '-1 minute') as fresh from tickets`), [{ status: 'in_progress', fresh: 1 }])
 })
