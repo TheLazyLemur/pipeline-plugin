@@ -1,6 +1,7 @@
 import type { Register } from 'claude-code'
 import { TAG, pass } from '../src/loop.ts'
 
+const FIRST_MS = 10_000
 const EVERY_MS = 5 * 60_000
 
 export const register: Register = on => {
@@ -8,7 +9,7 @@ export const register: Register = on => {
     const started = await next(e)
     const root = await $.session.root()
     let isRunning = false
-    $.clock.every(EVERY_MS, async () => {
+    const tick = async () => {
       if (isRunning) return
       isRunning = true
       try {
@@ -26,7 +27,10 @@ export const register: Register = on => {
       } finally {
         isRunning = false
       }
-    })
+    }
+    // first pass shortly after start rather than a full interval in
+    $.clock.after(FIRST_MS, tick)
+    $.clock.every(EVERY_MS, tick)
     return started
   })
 

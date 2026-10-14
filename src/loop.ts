@@ -47,7 +47,8 @@ export const pass = async (d: Deps): Promise<string[]> => {
   const fresh = (await sql(d.run, DB, `select ticket_id, title, url from tickets where status = 'new' order by rowid`)) as Ticket[]
   for (const t of fresh) {
     try {
-      await triage(d.run, d.complete, DB, { readiness, rubric, routing }, t)
+      const v = await triage(d.run, d.complete, DB, { readiness, rubric, routing }, t)
+      log.push(v.ready ? `${TAG}: ${t.ticket_id} is ready for ${v.model}` : `${TAG}: ${t.ticket_id} needs you: ${v.question}`)
     } catch (err) {
       log.push(`${TAG}: ${(err as Error).message}`)
     }
