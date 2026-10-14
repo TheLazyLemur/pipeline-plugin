@@ -20,7 +20,8 @@ while a command still runs is read as the end of your work.
    `git fetch origin <headRefName>` and `git worktree add --detach <path> origin/<headRefName>`.
 3. Address each finding, following the project's CLAUDE.md and rules. Fix what is right to fix; a finding you
    judge wrong or out of scope you leave, with your reason. Add or update tests for changed behaviour.
-4. Run the tests. Do not push with failing tests.
+4. Run the tests. Do not push with failing tests. Run every command you added or changed in a skill, prompt or
+   script from the project root, the way an agent would invoke it, not from the skill's own folder.
 5. Commit and push to the same branch, so the same PR updates (`git push origin HEAD:<headRefName>`). Never
    force-push and never open a new PR.
 6. Rewrite the PR's title and description with the `pipeline:writing-pull-requests` skill so they describe the

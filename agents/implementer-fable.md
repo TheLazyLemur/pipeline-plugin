@@ -17,7 +17,8 @@ while a command still runs is read as the end of your work.
 2. Work in a fresh git worktree on a new branch (`git worktree add`). Never switch branches or edit files in the
    main checkout: a human is working there.
 3. Implement the ticket, following the project's CLAUDE.md and rules. Add or update tests for the behaviour.
-4. Run the tests. Do not open a PR with failing tests.
+4. Run the tests. Do not open a PR with failing tests. Run every command you added or changed in a skill, prompt
+   or script from the project root, the way an agent would invoke it, not from the skill's own folder.
 5. Write the PR's title and description with the `pipeline:writing-pull-requests` skill: load it and follow it.
    Run its `check` on the body and the title, and do not open the PR until `check` passes. When the PR must be a
    draft, put `Draft: ` in front of the title the skill produces, and run `check` on the title without the prefix.
