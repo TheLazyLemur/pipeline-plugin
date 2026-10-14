@@ -1,6 +1,6 @@
 import type { Register } from 'claude-code'
 import { TAG, agentOf, pass } from '../src/loop.ts'
-import { REPORT_TOOL, onReport, stop } from '../src/result.ts'
+import { REPORT_TOOL, dbRefusal, onReport, stop } from '../src/result.ts'
 import { DB, type Run } from '../src/store.ts'
 
 const FIRST_MS = 10_000
@@ -52,6 +52,13 @@ export const register: Register = on => {
       $.ui.log(`report_result failed: ${(err as Error).message}`)
       return { deny: (err as Error).message }
     }
+  })
+
+  // a pipeline agent's Bash command that mentions pipeline.db is refused: its result goes through report_result
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    if (e.agentId === undefined) return next(e)
+    const deny = dbRefusal((await $.agent.list()).find(a => a.id === e.agentId), $.plugin.name, e.tool, e as Record<string, unknown>)
+    return deny === undefined ? next(e) : { deny }
   })
 
   // an implementer, verifier or fixer must report before it stops: blocked once, then its ticket goes to a human

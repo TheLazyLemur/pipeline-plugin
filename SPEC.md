@@ -64,8 +64,9 @@ A waiting ticket with a blocker that is not done is held: sync does not insert i
 ### The agents' results
 The mod registers a `report_result` tool (`mcp__pipeline__report_result`, schema `{status: "pr_open" | "reviewed"
 | "blocked", pr_url?, findings?, question?}`). The implementer, the verifier and the fixer finish by calling it and
-never touch the database. Its `tool.call` hook (`src/result.ts`) refuses any caller that is not one of the loop's
-own agents, the reviewers (they do not report), a status the caller's role does not send, and a call missing
+never touch the database: a second `tool.call` hook refuses any Bash command of the loop's agents that mentions
+`pipeline.db`, pointing them at the tool (tracker.db and every other file still run). The tool's `tool.call` hook
+(`src/result.ts`) refuses any caller that is not one of the loop's own agents, the reviewers (they do not report), a status the caller's role does not send, and a call missing
 `pr_url` for pr_open, `findings` for reviewed or `question` for blocked. It writes the ticket:
 
 | reporter | result | ticket |

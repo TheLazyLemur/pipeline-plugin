@@ -111,6 +111,15 @@ export const onReport = async (d: Pick<Deps, 'run' | 'spawn' | 'plugin'>, agent:
   }
 }
 
+/**
+ * The refusal for a pipeline agent's Bash command that mentions pipeline.db, or undefined to let the call run, so
+ * report_result is the only way an agent records its result. A text match: it stops the habit, not a workaround.
+ */
+export const dbRefusal = (agent: AgentInfo | undefined, plugin: string, tool: string, input: Record<string, unknown>): string | undefined =>
+  tool === 'Bash' && agentOf(agent, plugin) !== null && String(input.command ?? '').includes('pipeline.db')
+    ? `The pipeline agents do not touch pipeline.db: call the ${REPORT_TOOL.name} tool to record your result.`
+    : undefined
+
 export type Stop = { block?: string; log?: string }
 
 /** Handles a pipeline agent stopping: an agent that must report is blocked once while its ticket is still at its stage, then the ticket goes to needs_human. */
