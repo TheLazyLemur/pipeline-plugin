@@ -216,7 +216,7 @@ test('a ticket whose implementer is gone without a result goes to needs_human', 
   assert.match(String(row?.question), /stopped without recording/)
 })
 
-test('a refused spawn puts the ticket back to ready', async () => {
+test('a refused spawn puts the ticket back to ready, unowned', async () => {
   // given
   // ... a ready ticket and spawns being refused
   const { run, db } = await freshProject()
@@ -228,8 +228,8 @@ test('a refused spawn puts the ticket back to ready', async () => {
   const log = await pass(d)
 
   // then
-  // ... the ticket is ready for the next pass and the refusal is logged
-  assert.deepEqual(await sql(run, db, `select status from tickets`), [{ status: 'ready' }])
+  // ... the ticket is ready for the next pass with no claim left on it, and the refusal is logged
+  assert.deepEqual(await sql(run, db, `select status, owner, owner_seen from tickets`), [{ status: 'ready', owner: null, owner_seen: null }])
   assert.match(log.join('\n'), /T-1 not started: no verdict/)
 })
 

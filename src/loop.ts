@@ -145,7 +145,7 @@ export const pass = async (d: Deps): Promise<string[]> => {
     }`,
   })
   if (s.deny !== undefined) {
-    await sql(d.run, DB, `update tickets set status = 'ready' where ticket_id = ${lit(next.ticket_id)} and status = 'in_progress'`)
+    await sql(d.run, DB, `update tickets set status = 'ready', owner = null, owner_seen = null where ticket_id = ${lit(next.ticket_id)} and status = 'in_progress'`)
     log.push(`implementer for ${next.ticket_id} not started: ${s.deny}`)
   } else log.push(`${next.model} is implementing ${next.ticket_id}`)
   return log

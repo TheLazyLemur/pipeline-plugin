@@ -3,6 +3,7 @@ import { LOOP_PLUGIN, TAG } from '../pipeline-agents/src/agents.ts'
 import { pass } from '../src/loop.ts'
 
 const FIRST_MS = 10_000
+// STALE in src/loop.ts is 3 of these intervals: change it with this.
 const EVERY_MS = 5 * 60_000
 
 // The loop only. The hooks its agents need are in pipeline-agents: a plugin never hears the agents it spawned from
