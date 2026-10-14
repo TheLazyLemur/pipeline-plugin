@@ -480,6 +480,8 @@ def apply_ticket(lines: list[str], key: str | None, url: str | None) -> list[str
             continue
         if not key:
             continue
+        if not url:  # a tracker without ticket URLs gets the bare key, not an empty link
+            line = line.replace("[<TICKET-ID>](<ticket-url>)", key)
         out.append(line.replace("<TICKET-ID>", key).replace("<ticket-url>", url or ""))
     return out
 

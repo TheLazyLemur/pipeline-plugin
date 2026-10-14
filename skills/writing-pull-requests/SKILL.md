@@ -10,13 +10,13 @@ A template section you cannot fill with a fact is noise for the reviewer. Keep o
 `scripts/pr.py` does the mechanical half. You do the judgement half — it cannot know whether you ran the tests.
 
 ```bash
-python3 scripts/pr.py probe --template <name> > facts.json   # what applies, with evidence
+python3 <skill dir>/scripts/pr.py probe --template <name> > facts.json   # what applies, with evidence
 # you fill in the content and resolve every "undetermined"
-python3 scripts/pr.py build facts.json > body.md
-python3 scripts/pr.py check body.md --template <name> --title "<title>"
+python3 <skill dir>/scripts/pr.py build facts.json > body.md
+python3 <skill dir>/scripts/pr.py check body.md --template <name> --title "<title>"
 ```
 
-Run it from the repository root. Templates in `references/` are the source of truth for all three steps — edit a template and the script follows.
+`<skill dir>` is this skill's own directory: the base directory Claude Code prints when it loads the skill. Use that absolute path, because `scripts/pr.py` is not in the repository you are working in. Run the commands from that repository's root, because the script reads its git history. Templates in `<skill dir>/references/` are the source of truth for all three steps — edit a template and the script follows.
 
 ## 1. Read the change
 
