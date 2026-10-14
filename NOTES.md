@@ -23,3 +23,10 @@ Things SPEC.md does not settle. Built without them; each needs Daniel's call.
    ("gave no verdict": no user request behind it); the loop logs the deny and retries next pass. In other modes
    the implementer's `git push` / `gh pr create` may raise permission prompts in your session. SPEC.md assumes
    neither. Which permission setup should the loop expect?
+8. **No `/triage` or `/work` skills.** SPEC.md lists them, but the build brief's skill list does not, and the loop
+   already does both. Left out. Want them as manual triggers?
+9. **/pipeline-status saves your answer as a tracker comment**, so tracker.md also describes how to comment
+   (SPEC.md names list, read, move and link). The table has no column for the answer; see 1.
+10. **/learn edits the implementer prompts inside the plugin** (`agents/implementer-<model>.md`). If the plugin is
+    installed from a marketplace, an update overwrites those edits. Should project-level overrides live in
+    `.claude/pipeline/` instead?
