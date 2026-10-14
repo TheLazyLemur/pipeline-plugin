@@ -3,8 +3,8 @@
 Things SPEC.md does not settle. Built without them; each needs Daniel's call.
 
 1. **Resolved: triage sees only the title and URL.** Sync now fills a `body` column (description plus acceptance
-   criteria) and the triage prompt includes it. A tracker.md whose list command does not return the body still
-   works: sync reads each ticket in full instead. Running /tracker-setup again makes the list return it.
+   criteria) from the waiting command's `body` field, and the triage prompt includes it. A tracker.md whose
+   waiting command prints no `body` fails sync until /tracker-setup is run again.
 2. **Routing is applied by Haiku at triage**, from routing.md, in the same call. That avoids a markdown-table
    parser and lets "security-critical goes to fable" be a judgement. It only routes to sonnet, opus or fable,
    the models with an implementer agent; the table's `haiku` value is never used. Want a deterministic parser?
