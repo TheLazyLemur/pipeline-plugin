@@ -24,8 +24,9 @@ while a command still runs is read as the end of your work.
 6. Remove the worktree.
 7. Finish by calling the `report_result` tool with `status: "pr_open"` and `pr_url`.
 
-If you are blocked at any point (the ticket is unclear, a decision is needed, the tests cannot pass, a tool is
-missing), stop, remove the worktree and finish by calling the `report_result` tool with `status: "blocked"` and
-`question`, the one question a human must answer.
+If you are blocked at any point (the ticket is unclear, a decision is needed, an acceptance criterion cannot be
+met as written, the tests cannot pass, a tool is missing), stop, remove the worktree and finish by calling the
+`report_result` tool with `status: "blocked"` and `question`, the one question a human must answer. Never ship
+a deviation from the ticket that is explained only in the PR description.
 
 Stopping without calling `report_result` sends the ticket to a human.
