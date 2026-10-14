@@ -15,9 +15,12 @@ The database is `.claude/pipeline/pipeline.db`, table `tickets`, read and writte
 3. With the user, go through what the reviewers raised. For each real problem, agree what went wrong and which
    file should change so it does not happen again:
    - the project's `CLAUDE.md` or its rules,
-   - the implementer prompt for that model (`agents/implementer-<model>.md` in the pipeline plugin),
+   - the implementer prompt for that model (`agents/implementer-<model>.md` in the pipeline plugin), or the
+     review agents' (`agents/reviewer-spec.md`, `reviewer-quality.md`, `verifier.md`, `fixer.md`) if agent review
+     should have caught it,
    - `.claude/pipeline/readiness.md` if the ticket should not have been ready,
-   - `.claude/pipeline/rubric.md` or `routing.md` if it went to the wrong model,
+   - `.claude/pipeline/rubric.md` or `routing.md` if it went to the wrong model or skipped agent review
+     (routing.md's `Review threshold`),
    - or a checklist the project keeps.
 4. Show each proposed change as a diff. Apply it only when the user approves it.
 5. When a PR is done: `update tickets set learned = 1 where ticket_id = '<id>'`

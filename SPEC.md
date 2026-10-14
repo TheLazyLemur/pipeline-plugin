@@ -30,9 +30,12 @@ One pass of the loop (`src/loop.ts`), in order:
 2. Sync: pull new and changed tickets into SQLite (`src/sync.ts`, TypeScript).
 3. Triage every ticket with status new, with the ticket body (`src/triage.ts`). A ticket whose triage fails stays
    new and is retried next pass.
-4. Orphan check: an `in_progress` ticket with no live implementer goes to needs_human.
-5. Spawn: if no ticket is in_progress, spawn the implementer for the oldest ready one. If the spawn is denied,
-   the ticket goes back to ready and the loop retries next pass.
+4. Stages: an `in_progress` ticket with no live agent of its own moves on. At stage `review` the reviewers are
+   done, so it goes to `verify` and the verifier is spawned; at any other stage its agent is gone without a
+   result, so it goes to needs_human.
+5. Spawn: if no ticket is in_progress (at any stage), spawn the implementer for the oldest ready one, at stage
+   `implement`, telling it whether to open the PR as a draft. If the spawn is denied, the ticket goes back to
+   ready and the loop retries next pass.
 6. Never wait on a human. Anything that needs one is set to needs_human with the question, and the loop
    moves on.
 
@@ -58,19 +61,49 @@ A waiting ticket with a blocker that is not done is held: sync does not insert i
 `new` or `ready`. A held ticket has no row and no status. It enters the table once its blockers are done.
 `/pipeline-status` lists held tickets live from the blockers command.
 
-### The implementer's result
-The mod registers a `report_result` tool (`mcp__pipeline__report_result`, schema `{status: "pr_open" | "blocked",
-pr_url?, question?}`). The implementer finishes by calling it and never touches the database. Its `tool.call` hook
-(`src/result.ts`) refuses any caller that is not one of the loop's own `pipeline <ticket_id>` agents, and a call
-missing `pr_url` for pr_open or `question` for blocked. It writes the ticket: `pr_url` and `pr_open`, or `question`
-and `needs_human`. The write applies only while the ticket is still `in_progress`, and a log line is written only
-when a row changed. A `classic.SubagentStop` hook blocks an implementer whose ticket is still `in_progress` from
-stopping once, with a reason telling it to call the tool; if it stops again, the ticket goes to needs_human. The
-orphan check covers an implementer that crashes or is killed. The implementer works in its own git worktree, so it
-never switches branches in the checkout you are using.
+### The agents' results
+The mod registers a `report_result` tool (`mcp__pipeline__report_result`, schema `{status: "pr_open" | "reviewed"
+| "blocked", pr_url?, findings?, question?}`). The implementer, the verifier and the fixer finish by calling it and
+never touch the database. Its `tool.call` hook (`src/result.ts`) refuses any caller that is not one of the loop's
+own agents, the reviewers (they do not report), a status the caller's role does not send, and a call missing
+`pr_url` for pr_open, `findings` for reviewed or `question` for blocked. It writes the ticket:
+
+| reporter | result | ticket |
+|---|---|---|
+| implementer | pr_open, difficulty below the review threshold, or a ticket started before stages (null stage) | `pr_open` with `pr_url` |
+| implementer | pr_open, difficulty at or above the threshold | stage `review` with `pr_url`; both reviewers spawned |
+| verifier | reviewed, 0 findings | `pr_open` |
+| verifier | reviewed, more than 0 findings | stage `fix`; the fixer spawned |
+| fixer | pr_open | `pr_open` with `pr_url` |
+| any | blocked | `needs_human` with `question` |
+
+The write applies only while the ticket is `in_progress` at the reporter's stage, and a log line is written only
+when a row changed. The agents of the next stage are spawned in the same hook, while the reporter is still live, so
+a pass never takes the new stage for finished. A `classic.SubagentStop` hook blocks an implementer, verifier or
+fixer whose ticket is still at its stage from stopping once, with a reason telling it to call the tool; if it stops
+again, the ticket goes to needs_human. The stage check in each pass covers an agent that crashes or is killed. The
+implementer and the fixer work in their own git worktree, so they never switch branches in the checkout you are
+using.
+
+### Agent review (difficulty at or above the review threshold)
+Design: `docs/specs/agent-review.md`. The threshold is routing.md's `Review threshold: <n>` line (3 when the line is
+missing). Such a ticket's implementer opens its PR with a `Draft: ` title prefix. Then, all at status
+`in_progress`, the `stage` column moves `implement` → `review` → `verify` → (`fix`) and each stage's agents run:
+
+- `reviewer-spec` and `reviewer-quality`, read-only, on the model one tier above the routed one (sonnet → opus,
+  opus → fable, fable → fable): each reads the ticket, any spec it references and the PR at its head commit, and
+  posts its findings as one ticket comment.
+- `verifier`, on the same tier: checks each finding against the code, drops false ones, merges duplicates, posts
+  the checked list on the ticket and the PR, removes the `Draft: ` prefix when none are left, and reports the count.
+- `fixer`, on the routed model: addresses the checked findings on the same branch and PR, comments on the PR what
+  it fixed and why not the rest, removes the `Draft: ` prefix and reports.
+
+One round only. Every stage is read from the table and the live agents each pass, so a reload or restart picks up
+where it was. An agent that cannot be spawned sends the ticket to needs_human with the PR still a draft.
 
 ### Permissions and notices
-The loop's agents run unattended. A `tool.check` hook allows every tool call of the `pipeline <ticket>` agents
+The loop's agents run unattended. A `tool.check` hook allows every tool call of the loop's agents (described
+`pipeline <ticket>` for the implementer, `pipeline <ticket> <role>` for the review agents)
 that would otherwise prompt. Deny rules and an organization ceiling still apply, so keep `git push --force` and
 PR merges denied in settings if merging should stay with you. A `prompt.submit` hook drops the completion
 notice of those agents, which would start a turn on the main thread; you still see a one-line log per event.
@@ -94,7 +127,7 @@ cannot be synced, because the mod runs the commands itself.
 Credentials stay in env vars or the tool's own login, never in the file.
 
 ### `/pipeline-status` (skill)
-Shows counts by status, tickets in progress and open PRs, held tickets and what holds each (a dependency cycle
+Shows counts by status, tickets in progress with their stage and open PRs, held tickets and what holds each (a dependency cycle
 shows as tickets holding each other), then walks you through the needs_human questions and saves each answer.
 
 ### SQLite (`.claude/pipeline/pipeline.db`)
@@ -106,6 +139,7 @@ Holds pipeline status. The tracker owns the ticket itself; SQLite holds our fiel
 | title, url | copied from the tracker |
 | body | the description plus acceptance criteria, copied from the tracker by sync for triage |
 | status | new, needs_human, ready, in_progress, pr_open, done |
+| stage | implement, review, verify or fix, while in_progress; null (from before stages) reads as implement |
 | question | what it needs from you, when needs_human |
 | difficulty | 1-5 |
 | confidence | 0-1 |
@@ -124,10 +158,15 @@ title, URL and body. Writes status, difficulty, confidence, model and reason.
 ### Routing (`.claude/pipeline/routing.md`)
 A short table: difficulty to model. Example: 1-2 sonnet, 3-4 opus, 5 fable. Security-critical goes to fable.
 Applied by Haiku at triage, not by a parser, and only to sonnet, opus or fable, the models with an implementer.
+Its `Review threshold: <n>` line is read by the mod: the difficulty at and above which a ticket gets agent review.
 
 ### Implementers (`agents/implementer-sonnet.md`, `-opus.md`, `-fable.md`)
 Spawned by the loop for the routed model. Each reads the ticket, works in its own worktree, implements it, runs the
-tests, opens its own PR and links it on the tracker using tracker.md. It finishes by calling `report_result`, described above.
+tests, opens its own PR and links it on the tracker using tracker.md. It finishes by calling `report_result`, described above. Its prompt says whether to open the PR with the `Draft: `
+title prefix.
+
+### Review agents (`agents/reviewer-spec.md`, `reviewer-quality.md`, `verifier.md`, `fixer.md`)
+One file per role; the model is passed at spawn. Described above under agent review.
 
 ### `/learn` (skill)
 Finds PRs in SQLite with learned = false. For each, reads the review comments and works through them

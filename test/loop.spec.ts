@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import type { AgentInfo, AgentSpawnArgs, AgentSpawnResult, ModelCompleteResult } from 'claude-code'
 import { type Deps, pass } from '../src/loop.ts'
+import { onReport } from '../src/result.ts'
 import { type Run, lit, sql } from '../src/store.ts'
 import { BLOCKERS, DONE, MARK_DONE, MERGED, WAITING } from '../src/sync.ts'
 import { freshProject } from './helpers.ts'
@@ -142,6 +143,7 @@ test('the next ready ticket is handed to the implementer for its model', async (
   // ... two ready tickets and no agent running
   const { run, db } = await freshProject()
   await sql(run, db, `insert into tickets (ticket_id, title, status, model) values ('T-1', 'one', 'ready', 'fable'), ('T-2', 'two', 'ready', 'sonnet')`)
+  await sql(run, db, `update tickets set difficulty = 5`)
   const { d, spawned } = deps(run, [])
 
   // when
@@ -149,11 +151,12 @@ test('the next ready ticket is handed to the implementer for its model', async (
   await pass(d)
 
   // then
-  // ... the first ticket goes to the fable implementer and is in progress
+  // ... the first ticket goes to the fable implementer, told to open a draft, and is in progress at stage implement
   assert.deepEqual(spawned.map(s => [s.description, s.subagentType]), [['pipeline T-1', 'pipeline:implementer-fable']])
-  assert.deepEqual(await sql(run, db, `select ticket_id, status from tickets order by rowid`), [
-    { ticket_id: 'T-1', status: 'in_progress' },
-    { ticket_id: 'T-2', status: 'ready' },
+  assert.match(spawned[0]?.prompt ?? '', /with the title prefix "Draft: "/)
+  assert.deepEqual(await sql(run, db, `select ticket_id, status, stage from tickets order by rowid`), [
+    { ticket_id: 'T-1', status: 'in_progress', stage: 'implement' },
+    { ticket_id: 'T-2', status: 'ready', stage: null },
   ])
 })
 
@@ -216,7 +219,7 @@ test('a refused spawn puts the ticket back to ready', async () => {
   // given
   // ... a ready ticket and spawns being refused
   const { run, db } = await freshProject()
-  await sql(run, db, `insert into tickets (ticket_id, title, status, model) values ('T-1', 'one', 'ready', 'sonnet')`)
+  await sql(run, db, `insert into tickets (ticket_id, title, status, model, difficulty) values ('T-1', 'one', 'ready', 'sonnet', 1)`)
   const { d } = deps(run, [], true)
 
   // when
@@ -227,4 +230,137 @@ test('a refused spawn puts the ticket back to ready', async () => {
   // ... the ticket is ready for the next pass and the refusal is logged
   assert.deepEqual(await sql(run, db, `select status from tickets`), [{ status: 'ready' }])
   assert.match(log.join('\n'), /T-1 not started: no verdict/)
+})
+
+test('a difficulty 3+ ticket whose implementer reports a PR moves to review and both reviewers start one tier up', async () => {
+  // given
+  // ... a difficulty 3 opus ticket at stage implement, its implementer live, and the default review threshold
+  const { run, db } = await freshProject()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, stage, model, difficulty) values ('T-1', 'one', 'in_progress', 'implement', 'opus', 3)`)
+  const { d, spawned } = deps(run, [])
+
+  // when
+  // ... the implementer reports its draft PR
+  await onReport(d, live('pipeline T-1'), { status: 'pr_open', pr_url: 'https://git/pr/1' })
+
+  // then
+  // ... the ticket is at stage review and the spec and quality reviewers run on fable with the PR in their prompt
+  assert.deepEqual(await sql(run, db, `select status, stage, pr_url from tickets`), [{ status: 'in_progress', stage: 'review', pr_url: 'https://git/pr/1' }])
+  assert.deepEqual(
+    spawned.map(s => [s.description, s.subagentType, s.model]),
+    [
+      ['pipeline T-1 reviewer-spec', 'pipeline:reviewer-spec', 'fable'],
+      ['pipeline T-1 reviewer-quality', 'pipeline:reviewer-quality', 'fable'],
+    ],
+  )
+  assert.match(spawned[0]?.prompt ?? '', /PR: https:\/\/git\/pr\/1/)
+})
+
+test('a difficulty 1-2 ticket is told to open a normal PR and goes straight to pr_open', async () => {
+  // given
+  // ... a ready difficulty 2 sonnet ticket
+  const { run, db } = await freshProject()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, model, difficulty) values ('T-1', 'one', 'ready', 'sonnet', 2)`)
+  const { d, spawned } = deps(run, [])
+
+  // when
+  // ... a pass starts its implementer, which then reports a PR
+  await pass(d)
+  await onReport(d, live('pipeline T-1'), { status: 'pr_open', pr_url: 'https://git/pr/1' })
+
+  // then
+  // ... the implementer was told not to use the prefix, the ticket is pr_open and no reviewer started
+  assert.match(spawned[0]?.prompt ?? '', /without a "Draft: " title prefix/)
+  assert.deepEqual(spawned.map(s => s.description), ['pipeline T-1'])
+  assert.deepEqual(await sql(run, db, `select status, pr_url from tickets`), [{ status: 'pr_open', pr_url: 'https://git/pr/1' }])
+})
+
+test('a review whose reviewers are done hands over to the verifier one tier up', async () => {
+  // given
+  // ... a sonnet ticket at stage review with no reviewer live
+  const { run, db } = await freshProject()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, stage, model, difficulty, pr_url) values ('T-1', 'one', 'in_progress', 'review', 'sonnet', 3, 'https://git/pr/1')`)
+  const { d, spawned } = deps(run, [])
+
+  // when
+  // ... a pass runs
+  await pass(d)
+
+  // then
+  // ... the ticket is at stage verify and the verifier runs on opus
+  assert.deepEqual(await sql(run, db, `select status, stage from tickets`), [{ status: 'in_progress', stage: 'verify' }])
+  assert.deepEqual(spawned.map(s => [s.description, s.subagentType, s.model]), [['pipeline T-1 verifier', 'pipeline:verifier', 'opus']])
+})
+
+test('a review with a reviewer still live waits', async () => {
+  // given
+  // ... a ticket at stage review with one reviewer still running
+  const { run, db } = await freshProject()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, stage, model, difficulty, pr_url) values ('T-1', 'one', 'in_progress', 'review', 'opus', 3, 'https://git/pr/1')`)
+  const { d, spawned } = deps(run, [live('pipeline T-1 reviewer-quality')])
+
+  // when
+  // ... a pass runs
+  await pass(d)
+
+  // then
+  // ... nothing is spawned and the ticket stays at review
+  assert.deepEqual(spawned, [])
+  assert.deepEqual(await sql(run, db, `select status, stage from tickets`), [{ status: 'in_progress', stage: 'review' }])
+})
+
+test('no implementer is spawned while a ticket is being verified', async () => {
+  // given
+  // ... a ticket at stage verify with its verifier live, and a ready ticket
+  const { run, db } = await freshProject()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, stage, model, difficulty, pr_url) values ('T-1', 'one', 'in_progress', 'verify', 'opus', 3, 'https://git/pr/1')`)
+  await sql(run, db, `insert into tickets (ticket_id, title, status, model, difficulty) values ('T-2', 'two', 'ready', 'sonnet', 1)`)
+  const { d, spawned } = deps(run, [live('pipeline T-1 verifier')])
+
+  // when
+  // ... a pass runs
+  await pass(d)
+
+  // then
+  // ... no agent is started and the ready ticket waits
+  assert.deepEqual(spawned, [])
+  assert.deepEqual(await sql(run, db, `select status from tickets where ticket_id = 'T-2'`), [{ status: 'ready' }])
+})
+
+test('a ticket whose verifier is gone without a result goes to needs_human', async () => {
+  // given
+  // ... a ticket at stage verify and no agent live for it
+  const { run, db } = await freshProject()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, stage, model, difficulty, pr_url) values ('T-1', 'one', 'in_progress', 'verify', 'opus', 3, 'https://git/pr/1')`)
+  const { d, spawned } = deps(run, [])
+
+  // when
+  // ... a pass runs
+  const log = await pass(d)
+
+  // then
+  // ... it waits on a human, nothing is respawned, and the question names the verifier
+  const [row] = await sql(run, db, `select status, question from tickets`)
+  assert.equal(row?.status, 'needs_human')
+  assert.match(String(row?.question), /The verifier stopped without recording a result/)
+  assert.deepEqual(spawned, [])
+  assert.match(log.join('\n'), /T-1 needs you: its verifier stopped/)
+})
+
+test('a database made before stages gains the column on the first pass and its rows read as implement', async () => {
+  // given
+  // ... a tickets table without stage, holding a ticket in progress whose implementer is gone
+  const { run, db } = await freshProject()
+  await sql(run, db, `drop table tickets; create table tickets (ticket_id text primary key, title text not null, url text, body text,
+    status text not null default 'new', question text, difficulty integer, confidence real, model text, reason text, pr_url text,
+    learned integer not null default 0); insert into tickets (ticket_id, title, status, model) values ('T-1', 'one', 'in_progress', 'opus')`)
+
+  // when
+  // ... a pass runs
+  await pass(deps(run, []).d)
+
+  // then
+  // ... the column exists, and the ticket was handled as an implementer gone without a result
+  assert.deepEqual(await sql(run, db, `select stage, status from tickets`), [{ stage: null, status: 'needs_human' }])
+  assert.match(String((await sql(run, db, `select question from tickets`))[0]?.question), /The implementer stopped/)
 })

@@ -9,8 +9,8 @@ The database is `.claude/pipeline/pipeline.db`, table `tickets`, read and writte
 
 1. Show the counts by status:
    `sqlite3 -box .claude/pipeline/pipeline.db "select status, count(*) as n from tickets group by status"`
-2. Show what is in progress and the open PRs:
-   `select ticket_id, title, model, pr_url from tickets where status in ('in_progress', 'pr_open')`
+2. Show what is in progress, with its stage (implement, review, verify or fix), and the open PRs:
+   `select ticket_id, title, model, case status when 'in_progress' then 'in_progress (' || coalesce(stage, 'implement') || ')' else status end as status, pr_url from tickets where status in ('in_progress', 'pr_open')`
 3. List the held tickets: waiting in the tracker but kept out of the table by a blocker not yet done. Run the
    `## List the blockers` and `## List the tickets waiting to be worked` commands from
    `.claude/pipeline/tracker.md` live, from the project root. For each waiting ticket with rows whose

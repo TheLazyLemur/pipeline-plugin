@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import type { ModelCompleteRequest, ModelCompleteResult } from 'claude-code'
 import { sql } from '../src/store.ts'
-import { triage } from '../src/triage.ts'
+import { reviewFrom, triage } from '../src/triage.ts'
 import { freshDb, run } from './helpers.ts'
 
 const guides = { readiness: 'Has acceptance criteria.', rubric: '1 trivial .. 5 hard.', routing: '1-2 sonnet' }
@@ -79,4 +80,20 @@ test('the ticket body reaches the Haiku prompt', async () => {
   // ... Haiku is shown the body
   assert.equal(prompts.length, 1)
   assert.match(prompts[0], /Google sign-in\.\n- a user can sign in with Google/)
+})
+
+test('the review threshold is read from routing.md, 3 when the line is missing, and a bad one fails', () => {
+  // given
+  // ... the default routing.md, one with the threshold raised, one written before it existed, and one with a typo
+  const routing = readFileSync(new URL('../skills/tracker-setup/defaults/routing.md', import.meta.url), 'utf8')
+
+  // when
+  // ... each is read
+  const read = [routing, routing.replace('Review threshold: 3', 'review threshold: 6'), '# Routing\n'].map(reviewFrom)
+  const bad = () => reviewFrom('Review threshold: three')
+
+  // then
+  // ... the defaults and the raised value come back, and the typo is named
+  assert.deepEqual(read, [3, 6, 3])
+  assert.throws(bad, /must be a whole number from 1, not "three"/)
 })
