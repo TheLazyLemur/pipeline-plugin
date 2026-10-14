@@ -16,6 +16,9 @@ claude --plugin-dir /path/to/pipeline-plugin --plugin-dir /path/to/pipeline-plug
 `pipeline` declares `pipeline-agents` under `dependencies`. With only `pipeline` loaded, the loop runs but no
 agent's result is ever recorded.
 
+The plugin needs `python3` on the `PATH`: the implementer and fixer write every PR with the
+`pipeline:writing-pull-requests` skill, and its `scripts/pr.py` runs under `python3`.
+
 Then, in your project:
 
 | command | what it does |
