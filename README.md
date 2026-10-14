@@ -29,7 +29,8 @@ then one pass every 5 minutes. Pipeline state lives in `.claude/pipeline/pipelin
 flowchart TD
     start([Timer fires]) --> setup{"`.claude/pipeline` set up?"}
     setup -- no --> stop(["Log: run /tracker-setup"])
-    setup -- yes --> sync[Sync: pull new and changed tickets from the tracker]
+    setup -- yes --> merged[Each pr_open ticket whose PR merged: mark done in the tracker and the table]
+    merged --> sync[Sync: pull new and changed tickets from the tracker, holding back any with a blocker not done]
     sync --> triage[Triage every new ticket with Haiku]
     triage --> verdict{Ready?}
     verdict -- no --> nh[needs_human: question stored on the ticket]
@@ -45,3 +46,6 @@ flowchart TD
 
 The loop never waits on a human: anything it cannot decide is set to `needs_human` with its question, and the
 pass moves on. An `in_progress` ticket whose implementer is no longer running also goes to `needs_human`.
+A ticket blocked by another in the tracker is held until its blocker is done; marking merged PRs done before
+sync releases it in the same pass, so it is built on its blocker's merged code. `/pipeline:pipeline-status`
+lists held tickets and what holds each.
