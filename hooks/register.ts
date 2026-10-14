@@ -44,10 +44,12 @@ export const register: Register = on => {
     try {
       const root = await $.session.root()
       const run: Run = (argv, init) => $.process.run(argv, { cwd: root, ...init })
-      const lines = await onReport({ run, spawn: args => $.agent.spawn(args), plugin: $.plugin.name }, agent, e as Record<string, unknown>)
-      for (const line of lines ?? []) $.ui.log(line)
-      return { result: lines === null ? 'Not recorded: the ticket is no longer at your stage.' : 'Recorded.' }
+      const r = await onReport({ run, spawn: args => $.agent.spawn(args), plugin: $.plugin.name }, agent, e as Record<string, unknown>)
+      for (const line of r.log) $.ui.log(line)
+      if (r.deny !== undefined) return { deny: r.deny }
+      return { result: r.changed ? 'Recorded.' : 'Not recorded: the ticket is no longer at your stage.' }
     } catch (err) {
+      $.ui.log(`report_result failed: ${(err as Error).message}`)
       return { deny: (err as Error).message }
     }
   })

@@ -33,14 +33,19 @@ const settle = async (run: Run, db: string, ticketId: string, stage: Stage, set:
 
 const text = (v: unknown) => (typeof v === 'string' && v.trim() !== '' ? v.trim() : null)
 
-/** What a recorded report logs, and the stage it moved the ticket into whose agents must now be started. */
-export type Reported = { log: string; next?: 'review' | 'fix' }
+/** What a report_result call logs: `changed` is whether the row moved, `deny` the refusal the agent reads, `next` the stage whose agents must now be started. */
+export type Reported = { log: string; changed: boolean; next?: 'review' | 'fix'; deny?: string }
 
-/**
- * Handles a report_result call; `reviewFrom` is routing.md's review threshold. Throws the refusal the agent reads;
- * resolves null when no row changed.
- */
-export const report = async (run: Run, db: string, plugin: string, agent: AgentInfo | undefined, input: Record<string, unknown>, reviewFrom: number): Promise<Reported | null> => {
+/** Settles the ticket, resolving the changed log, or one saying why nothing changed (`what` is what the agent reported). */
+const apply = async (run: Run, db: string, id: string, stage: Stage, set: string, what: string, log: string, next?: Reported['next']): Promise<Reported> => {
+  if (await settle(run, db, id, stage, set)) return { log, changed: true, next }
+  const [t] = (await sql(run, db, `select status, stage from tickets where ticket_id = ${lit(id)}`)) as Ticket[]
+  const now = t === undefined ? 'missing' : t.status === 'in_progress' ? `in_progress at ${t.stage ?? 'implement'}` : t.status
+  return { log: `${id} reported ${what} but was already ${now}; nothing changed`, changed: false }
+}
+
+/** Records a report_result call; throws the refusal the agent reads. */
+const record = async (run: Run, db: string, plugin: string, agent: AgentInfo | undefined, input: Record<string, unknown>, reviewFrom: number): Promise<Reported> => {
   const who = agentOf(agent, plugin)
   if (who === null) throw new Error('report_result is only for the pipeline agents')
   const stage = REPORTS_AT[who.role]
@@ -51,14 +56,14 @@ export const report = async (run: Run, db: string, plugin: string, agent: AgentI
   if (input.status === 'blocked') {
     const question = text(input.question)
     if (question === null) throw new Error('status blocked needs question')
-    return (await settle(run, db, id, stage, `status = 'needs_human', question = ${lit(question)}`)) ? { log: `${id} needs you: ${question}` } : null
+    return apply(run, db, id, stage, `status = 'needs_human', question = ${lit(question)}`, 'a question', `${id} needs you: ${question}`)
   }
 
   if (input.status === 'reviewed') {
     const n = input.findings
     if (!Number.isInteger(n) || (n as number) < 0) throw new Error('status reviewed needs findings, a whole number from 0')
-    if (n === 0) return (await settle(run, db, id, stage, `status = 'pr_open'`)) ? { log: `${id} passed review: its PR is yours` } : null
-    return (await settle(run, db, id, stage, `stage = 'fix'`)) ? { log: `${id} has ${n} review findings to fix`, next: 'fix' } : null
+    if (n === 0) return apply(run, db, id, stage, `status = 'pr_open'`, 'no findings', `${id} passed review: its PR is yours`)
+    return apply(run, db, id, stage, `stage = 'fix'`, `${n} findings`, `${id} has ${n} review findings to fix`, 'fix')
   }
 
   const url = text(input.pr_url)
@@ -69,28 +74,40 @@ export const report = async (run: Run, db: string, plugin: string, agent: AgentI
     if (t?.stage === 'implement') {
       if (t.difficulty === null) throw new Error(`${id} is in progress with no difficulty`)
       if (t.difficulty >= reviewFrom)
-        return (await settle(run, db, id, stage, `stage = 'review', pr_url = ${lit(url)}`)) ? { log: `${id} has a draft PR for review: ${url}`, next: 'review' } : null
+        return apply(run, db, id, stage, `stage = 'review', pr_url = ${lit(url)}`, 'a draft PR', `${id} has a draft PR for review: ${url}`, 'review')
     }
   }
-  return (await settle(run, db, id, stage, `status = 'pr_open', pr_url = ${lit(url)}`)) ? { log: `${id} has a PR: ${url}` } : null
+  return apply(run, db, id, stage, `status = 'pr_open', pr_url = ${lit(url)}`, 'a PR', `${id} has a PR: ${url}`)
+}
+
+/**
+ * Handles a report_result call; `reviewFrom` is routing.md's review threshold. Every call resolves one log line:
+ * a refusal carries the reason the agent reads in `deny`.
+ */
+export const report = async (run: Run, db: string, plugin: string, agent: AgentInfo | undefined, input: Record<string, unknown>, reviewFrom: number): Promise<Reported> => {
+  try {
+    return await record(run, db, plugin, agent, input, reviewFrom)
+  } catch (err) {
+    const deny = (err as Error).message
+    return { log: `${agentOf(agent, plugin)?.ticket ?? agent?.description ?? 'unknown agent'} report_result refused: ${deny}`, changed: false, deny }
+  }
 }
 
 /**
  * A report_result call end to end: records it, then starts the agents of the stage it moved the ticket into, while
- * the reporter is still live so the loop's pass never takes that stage for finished. Throws the refusal the agent
- * reads; resolves what to log, null when no row changed.
+ * the reporter is still live so the loop's pass never takes that stage for finished. Resolves what to log (one line
+ * per call, plus one for agents started) and, for a refusal, the reason in `deny`.
  */
-export const onReport = async (d: Pick<Deps, 'run' | 'spawn' | 'plugin'>, agent: AgentInfo | undefined, input: Record<string, unknown>): Promise<string[] | null> => {
+export const onReport = async (d: Pick<Deps, 'run' | 'spawn' | 'plugin'>, agent: AgentInfo | undefined, input: Record<string, unknown>): Promise<{ log: string[]; changed: boolean; deny?: string }> => {
   const routing = await d.run(['cat', '.claude/pipeline/routing.md'])
   const r = await report(d.run, DB, d.plugin, agent, input, reviewFrom(routing.exitCode === 0 ? routing.stdout : ''))
-  if (r === null) return null
-  if (r.next === undefined) return [r.log]
+  if (r.next === undefined) return { log: [r.log], changed: r.changed, deny: r.deny }
   const ticket = agentOf(agent, d.plugin)?.ticket as string
   try {
-    return [r.log, await start(d, ticket, r.next)]
+    return { log: [r.log, await start(d, ticket, r.next)], changed: true }
   } catch (err) {
     // the report is recorded, so the agent is not told it failed
-    return [r.log, `${ticket} ${r.next} not started: ${(err as Error).message}`]
+    return { log: [r.log, `${ticket} ${r.next} not started: ${(err as Error).message}`], changed: true }
   }
 }
 
