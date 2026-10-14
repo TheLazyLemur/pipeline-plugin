@@ -19,9 +19,10 @@ Things SPEC.md does not settle. Built without them; each needs Daniel's call.
 6. **An in_progress ticket with no live implementer goes to needs_human.** Otherwise a crashed or killed
    implementer (or a session restart) leaves it in_progress and the loop never spawns again.
 7. **Background agents and permissions.** Under auto mode the first timer-driven spawn in the probe was denied
-   ("gave no verdict": no user request behind it); the loop logs the deny and retries next pass. In other modes
-   the implementer's `git push` / `gh pr create` may raise permission prompts in your session. SPEC.md assumes
-   neither. Which permission setup should the loop expect?
+   ("gave no verdict": no user request behind it); the loop logs the deny and retries next pass. Decided: the
+   mod allows every tool call of its own `pipeline <ticket>` agents that would otherwise prompt (`tool.check`).
+   Deny rules and an organization ceiling still apply, so keep `git push --force` and PR merges denied in settings
+   if merging should stay with you. Auto mode's classifier can still refuse the spawn itself.
 8. **No `/triage` or `/work` skills.** SPEC.md lists them, but the build brief's skill list does not, and the loop
    already does both. Left out. Want them as manual triggers?
 9. **/pipeline-status saves your answer as a tracker comment**, so tracker.md also describes how to comment

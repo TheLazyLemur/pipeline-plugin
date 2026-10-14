@@ -51,6 +51,15 @@ export const register: Register = on => {
     return done
   })
 
+  // the loop's agents run unattended: a call that would prompt is allowed; deny rules and an org ceiling still stand
+  on('tool.check', async ($, e, next) => {
+    const verdict = await next(e)
+    if (verdict.decision !== 'ask' || e.agentId === undefined || (e.ceiling !== undefined && e.ceiling !== 'allow')) return verdict
+    const agent = (await $.agent.list()).find(a => a.id === e.agentId)
+    const isOurs = agent?.spawnedBy === $.plugin.name && agent.description.startsWith(`${TAG} `)
+    return isOurs ? { decision: 'allow', reason: `${$.plugin.name} allows its own agents' calls` } : verdict
+  })
+
   // the loop's agents finishing must not start a turn on the main thread
   const finished = new RegExp(`<summary>(Agent "${TAG} [^"]*" [^<]*)</summary>`)
   on('prompt.submit', ($, e, next) => {
