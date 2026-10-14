@@ -5,16 +5,16 @@ import { sql } from '../src/store.ts'
 import { triage } from '../src/triage.ts'
 import { freshDb, run } from './helpers.ts'
 
-const guides = { readiness: 'Has acceptance criteria.', rubric: '1 trivial .. 5 hard.' }
+const guides = { readiness: 'Has acceptance criteria.', rubric: '1 trivial .. 5 hard.', routing: '1-2 sonnet' }
 const haiku = (text: string) => async () => ({ isAnswered: true, text }) as ModelCompleteResult
 const ticket = { ticket_id: 'T-1', title: 'Add login', url: null }
 
-test('a ready ticket gets its scores and status ready', async () => {
+test('a ready ticket gets its scores, its routed model and status ready', async () => {
   // given
   // ... a new ticket and Haiku judging it ready, its JSON wrapped in prose
   const db = await freshDb()
   await sql(run, db, `insert into tickets (ticket_id, title) values ('T-1', 'Add login')`)
-  const complete = haiku('Here: {"ready": true, "question": null, "difficulty": 3, "confidence": 0.8, "reason": "clear"}')
+  const complete = haiku('Here: {"ready": true, "question": null, "difficulty": 3, "confidence": 0.8, "model": "opus", "reason": "clear"}')
 
   // when
   // ... it is triaged
@@ -22,8 +22,8 @@ test('a ready ticket gets its scores and status ready', async () => {
 
   // then
   // ... the row holds the verdict
-  assert.deepEqual(await sql(run, db, `select status, question, difficulty, confidence, reason from tickets`), [
-    { status: 'ready', question: null, difficulty: 3, confidence: 0.8, reason: 'clear' },
+  assert.deepEqual(await sql(run, db, `select status, question, difficulty, confidence, model, reason from tickets`), [
+    { status: 'ready', question: null, difficulty: 3, confidence: 0.8, model: 'opus', reason: 'clear' },
   ])
 })
 
@@ -32,7 +32,7 @@ test('a ticket that is not ready goes to needs_human with the question', async (
   // ... a new ticket and Haiku asking for acceptance criteria
   const db = await freshDb()
   await sql(run, db, `insert into tickets (ticket_id, title) values ('T-1', 'Add login')`)
-  const complete = haiku('{"ready": false, "question": "Which providers?", "difficulty": 2, "confidence": 0.6, "reason": "no criteria"}')
+  const complete = haiku('{"ready": false, "question": "Which providers?", "difficulty": 2, "confidence": 0.6, "model": "sonnet", "reason": "no criteria"}')
 
   // when
   // ... it is triaged
@@ -48,7 +48,7 @@ test('a reply that is not a verdict leaves the ticket new and throws', async () 
   // ... a new ticket and a difficulty outside 1-5
   const db = await freshDb()
   await sql(run, db, `insert into tickets (ticket_id, title) values ('T-1', 'Add login')`)
-  const complete = haiku('{"ready": true, "question": null, "difficulty": 9, "confidence": 0.5, "reason": "x"}')
+  const complete = haiku('{"ready": true, "question": null, "difficulty": 9, "confidence": 0.5, "model": "sonnet", "reason": "x"}')
 
   // when
   // ... it is triaged

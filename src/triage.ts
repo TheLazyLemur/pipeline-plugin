@@ -5,12 +5,22 @@ import { type Run, type Ticket, lit, sql } from './store.ts'
 export type Complete = (request: ModelCompleteRequest) => Promise<ModelCompleteResult>
 
 /** The project's own guides, `.claude/pipeline/<name>.md`. */
-export type Guides = { readiness: string; rubric: string }
+export type Guides = { readiness: string; rubric: string; routing: string }
 
-export type Verdict = { ready: boolean; question: string | null; difficulty: number; confidence: number; reason: string }
+/** The models with an implementer agent, `agents/implementer-<model>.md`. */
+export const MODELS = ['sonnet', 'opus', 'fable'] as const
+
+export type Verdict = {
+  ready: boolean
+  question: string | null
+  difficulty: number
+  confidence: number
+  model: (typeof MODELS)[number]
+  reason: string
+}
 
 const system = (g: Guides) => `You triage one ticket for an AI implementer that works without a human.
-Judge readiness against the readiness guide and difficulty against the rubric.
+Judge readiness against the readiness guide, difficulty against the rubric, and pick the model from the routing table.
 
 <readiness>
 ${g.readiness}
@@ -20,8 +30,12 @@ ${g.readiness}
 ${g.rubric}
 </rubric>
 
+<routing>
+${g.routing}
+</routing>
+
 Reply with only this JSON object:
-{"ready": true|false, "question": "what a human must answer, when not ready, else null", "difficulty": 1-5, "confidence": 0-1, "reason": "one or two sentences"}`
+{"ready": true|false, "question": "what a human must answer, when not ready, else null", "difficulty": 1-5, "confidence": 0-1, "model": "sonnet"|"opus"|"fable", "reason": "one or two sentences"}`
 
 /** Reads Haiku's reply; throws when it is not the verdict the prompt asked for. */
 export const parseVerdict = (text: string): Verdict => {
@@ -31,6 +45,7 @@ export const parseVerdict = (text: string): Verdict => {
     typeof v.ready === 'boolean' &&
     Number.isInteger(v.difficulty) && v.difficulty >= 1 && v.difficulty <= 5 &&
     typeof v.confidence === 'number' && v.confidence >= 0 && v.confidence <= 1 &&
+    MODELS.includes(v.model) &&
     typeof v.reason === 'string' &&
     (v.ready || (typeof v.question === 'string' && v.question.trim() !== ''))
   if (!ok) throw new Error(`not a triage verdict: ${text.slice(0, 200)}`)
@@ -50,7 +65,7 @@ export const triage = async (run: Run, complete: Complete, db: string, guides: G
   const v = parseVerdict(r.text)
   await sql(run, db, `update tickets set
       status = ${lit(v.ready ? 'ready' : 'needs_human')}, question = ${lit(v.question)},
-      difficulty = ${lit(v.difficulty)}, confidence = ${lit(v.confidence)}, reason = ${lit(v.reason)}
+      difficulty = ${lit(v.difficulty)}, confidence = ${lit(v.confidence)}, model = ${lit(v.model)}, reason = ${lit(v.reason)}
     where ticket_id = ${lit(t.ticket_id)} and status = 'new'`)
   return v
 }
