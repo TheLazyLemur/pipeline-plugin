@@ -9,6 +9,8 @@ export type Ticket = {
   ticket_id: string
   title: string
   url: string | null
+  /** The ticket's description plus acceptance criteria, filled by sync. */
+  body: string | null
   status: Status
   question: string | null
   difficulty: number | null
@@ -25,6 +27,7 @@ export const SCHEMA = `create table if not exists tickets (
   ticket_id text primary key,
   title text not null,
   url text,
+  body text,
   status text not null default 'new'
     check (status in ('new', 'needs_human', 'ready', 'in_progress', 'pr_open', 'done')),
   question text,
@@ -52,4 +55,11 @@ export const sql = async (run: Run, db: string, statement: string): Promise<Reco
   const r = await run(['sqlite3', '-bail', '-json', '-cmd', '.timeout 5000', db, statement])
   if (r.exitCode !== 0) throw new Error(`sqlite3 exited ${r.exitCode}: ${r.stderr.trim()}`)
   return r.stdout.trim() === '' ? [] : JSON.parse(r.stdout)
+}
+
+/** Applies SCHEMA, and adds the columns a database made before them is missing. */
+export const migrate = async (run: Run, db: string) => {
+  await sql(run, db, SCHEMA)
+  const body = await sql(run, db, `select name from pragma_table_info('tickets') where name = 'body'`)
+  if (body.length === 0) await sql(run, db, `alter table tickets add column body text`)
 }

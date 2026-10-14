@@ -1,5 +1,5 @@
 import type { AgentInfo, AgentSpawnArgs, AgentSpawnResult } from 'claude-code'
-import { DB, type Run, SCHEMA, type Ticket, lit, sql } from './store.ts'
+import { DB, type Run, type Ticket, lit, migrate, sql } from './store.ts'
 import { type Complete, MODELS, triage } from './triage.ts'
 
 export type Deps = {
@@ -33,7 +33,7 @@ export const pass = async (d: Deps): Promise<string[]> => {
     read(d.run, 'routing'),
   ])
   if (tracker === null || readiness === null || rubric === null || routing === null) return [`no .claude/pipeline setup here; run /tracker-setup`]
-  await sql(d.run, DB, SCHEMA)
+  await migrate(d.run, DB)
   const log: string[] = []
   const live = (await d.agents()).filter(a => a.spawnedBy === d.plugin && LIVE.includes(a.status)).map(a => a.description)
 
@@ -44,7 +44,7 @@ export const pass = async (d: Deps): Promise<string[]> => {
   }
 
   // 2. triage; a failed ticket stays new and is retried next pass
-  const fresh = (await sql(d.run, DB, `select ticket_id, title, url from tickets where status = 'new' order by rowid`)) as Ticket[]
+  const fresh = (await sql(d.run, DB, `select ticket_id, title, url, body from tickets where status = 'new' order by rowid`)) as Ticket[]
   for (const t of fresh) {
     try {
       const v = await triage(d.run, d.complete, DB, { readiness, rubric, routing }, t)

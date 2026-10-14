@@ -19,10 +19,11 @@ tracker and write the pipeline database.
    - if it is in the table as `new` or `ready`, remove it: `delete from tickets where ticket_id = '<id>' and status in ('new', 'ready');`
    - otherwise leave it.
 
-   Upsert every ticket that is not blocked:
+   Upsert every ticket that is not blocked. `<body>` is its description followed by its acceptance criteria,
+   from the list; if the list does not return them, read the ticket in full as tracker.md says.
    ```sql
-   insert into tickets (ticket_id, title, url) values ('<id>', '<title>', '<url>')
-   on conflict (ticket_id) do update set title = excluded.title, url = excluded.url;
+   insert into tickets (ticket_id, title, url, body) values ('<id>', '<title>', '<url>', '<body>')
+   on conflict (ticket_id) do update set title = excluded.title, url = excluded.url, body = excluded.body;
    ```
    A new row starts as `new`; never change the status of an existing one here.
 2. For every row whose status is not `done`, check whether the tracker now has it in a done status (per the
