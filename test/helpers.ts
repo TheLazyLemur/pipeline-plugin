@@ -1,3 +1,4 @@
+import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -8,13 +9,16 @@ import { DB, type Run, SCHEMA, sql } from '../pipeline-agents/src/store.ts'
 import { BLOCKERS, DONE, MARK_DONE, MERGED, WAITING } from '../src/sync.ts'
 
 /** `$.process.run` over child_process. */
-export const run: Run = async (argv, init) => {
+export const run: Run = async ([cmd, ...args], init) => {
+  assert(cmd, 'run needs a command')
+  const ended = (exitCode: number, stdout: string, stderr: string): ProcessRunResult =>
+    ({ exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false })
   try {
-    const { stdout, stderr } = await promisify(execFile)(argv[0], argv.slice(1), { cwd: init?.cwd })
-    return { exitCode: 0, stdout, stderr } as ProcessRunResult
+    const { stdout, stderr } = await promisify(execFile)(cmd, args, { cwd: init?.cwd })
+    return ended(0, stdout, stderr)
   } catch (e) {
     const err = e as { code: number; stdout: string; stderr: string }
-    return { exitCode: err.code, stdout: err.stdout, stderr: err.stderr } as ProcessRunResult
+    return ended(err.code, err.stdout, err.stderr)
   }
 }
 

@@ -2,7 +2,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test 'test/*.spec.ts'",
-    "test:plugin": "claude plugin test pipeline-agents"
+    "test": "npm run typecheck && node --test 'test/*.spec.ts'",
+    "test:plugin": "claude plugin test pipeline-agents",
+    "typecheck": "tsc",
+    "types:vendor": "rm -rf types/vendor && mkdir -p types/vendor && cp -R .claude-plugin/types/claude-code .claude-plugin/types/claude-code-tools types/vendor/"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.9",
+    "typescript": "^7.0.2"
   }
 }
