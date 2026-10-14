@@ -1,0 +1,25 @@
+import { execFile } from 'node:child_process'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { promisify } from 'node:util'
+import type { ProcessRunResult } from 'claude-code'
+import { type Run, SCHEMA, sql } from '../src/store.ts'
+
+/** `$.process.run` over child_process. */
+export const run: Run = async (argv, init) => {
+  try {
+    const { stdout, stderr } = await promisify(execFile)(argv[0], argv.slice(1), { cwd: init?.cwd })
+    return { exitCode: 0, stdout, stderr } as ProcessRunResult
+  } catch (e) {
+    const err = e as { code: number; stdout: string; stderr: string }
+    return { exitCode: err.code, stdout: err.stdout, stderr: err.stderr } as ProcessRunResult
+  }
+}
+
+/** A fresh database with the schema applied. */
+export const freshDb = async () => {
+  const db = join(mkdtempSync(join(tmpdir(), 'pipeline-')), 'pipeline.db')
+  await sql(run, db, SCHEMA)
+  return db
+}
