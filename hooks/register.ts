@@ -3,6 +3,7 @@ import { LOOP_PLUGIN, TAG } from '../pipeline-agents/src/agents.ts'
 import { pass } from '../src/loop.ts'
 
 const FIRST_MS = 10_000
+// STALE in src/loop.ts is 3 of these intervals: change it with this.
 const EVERY_MS = 5 * 60_000
 
 // The loop only. The hooks its agents need are in pipeline-agents: a plugin never hears the agents it spawned from
@@ -12,6 +13,8 @@ export const register: Register = on => {
     const started = await next(e)
     if ($.plugin.name !== LOOP_PLUGIN) throw new Error(`the loop plugin must be named ${LOOP_PLUGIN}: pipeline-agents recognises agents by it`)
     const root = await $.session.root()
+    // read once, so every claim and heartbeat of this loop carries the same owner
+    const session = await $.session.id()
     let isRunning = false
     const tick = async () => {
       if (isRunning) return
@@ -23,6 +26,7 @@ export const register: Register = on => {
           spawn: args => $.agent.spawn(args),
           agents: () => $.agent.list(),
           plugin: $.plugin.name,
+          session,
         })
         for (const line of lines) $.ui.log(line)
       } catch (err) {

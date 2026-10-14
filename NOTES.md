@@ -28,3 +28,10 @@ Things SPEC.md does not settle. Everything else the build decided is described i
     `pipeline.db` is refused, reads included, and so is a commit message or PR body that names it. Read, Grep and
     other tools are not checked, and a command that builds the path (`pipeline.d"b"`) gets through. It stops the
     habit; it is not a boundary. Narrow it to `sqlite3` writes, or widen it to every tool?
+11. **Decided: several sessions may run the loop on one project, so tickets carry an owner and a heartbeat** —
+    a lease, which the first version left out. `$.agent.list()` only sees its own session's agents, so without an
+    owner a second session sent the first's `in_progress` tickets to needs_human as orphans, and two passes close
+    together could both spawn an implementer for one ticket. The claim (`ready` → `in_progress`) is one guarded
+    update that also requires nothing to be `in_progress`; only the pass that gets the row back spawns. A session
+    stopped for 15 minutes (3 passes) loses its tickets to needs_human, so a slow pass or a laptop asleep for that
+    long does too. The owner is the session id read once at session start.

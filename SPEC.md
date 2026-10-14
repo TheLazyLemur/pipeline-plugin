@@ -21,6 +21,9 @@ built-in `/loop`. It is a small mod (`hooks/register.ts`) that runs in the backg
 - Triage calls Haiku directly (`$.model.complete`), off the main thread.
 - Implementation is a background subagent (`$.agent.spawn` with the routed model), off the main thread.
 - SQLite and the tracker.md commands are run with `$.process.run`, from the project root.
+- Several sessions with the pipeline loaded may share one project. Each pass first stamps `owner_seen` on the
+  `in_progress` tickets its session owns (the heartbeat); an owner unseen for 3 pass intervals (15 minutes) is
+  taken as stopped. Sync, the merge check and triage need no owner: they are idempotent across sessions.
 - Without `.claude/pipeline/tracker.md`, `readiness.md`, `rubric.md` and `routing.md` a pass only logs
   "run /tracker-setup".
 
@@ -30,12 +33,15 @@ One pass of the loop (`src/loop.ts`), in order:
 2. Sync: pull new and changed tickets into SQLite (`src/sync.ts`, TypeScript).
 3. Triage every ticket with status new, with the ticket body (`src/triage.ts`). A ticket whose triage fails stays
    new and is retried next pass.
-4. Stages: an `in_progress` ticket with no live agent of its own moves on. At stage `review` the reviewers are
-   done, so it goes to `verify` and the verifier is spawned; at any other stage its agent is gone without a
-   result, so it goes to needs_human.
-5. Spawn: if no ticket is in_progress (at any stage), spawn the implementer for the oldest ready one, at stage
-   `implement`, telling it whether to open the PR as a draft. If the spawn is denied, the ticket goes back to
-   ready and the loop retries next pass.
+4. Stages: only the session that claimed an `in_progress` ticket (its `owner`) moves it on, since
+   `$.agent.list()` sees that session's agents alone. An owned ticket with no live agent of its own moves on. At
+   stage `review` the reviewers are done, so it goes to `verify` and the verifier is spawned; at any other stage
+   its agent is gone without a result, so it goes to needs_human. Another session's ticket is left alone while
+   its owner has been seen in the last 15 minutes, and goes to needs_human once it has not.
+5. Spawn: if no ticket is in_progress (at any stage, in any session), claim the oldest ready one and spawn its
+   implementer at stage `implement`, telling it whether to open the PR as a draft. The claim is one guarded
+   update that sets the owner; a pass whose claim gets no row back (another pass won it) spawns nothing. If the
+   spawn is denied, the ticket goes back to ready and the loop retries next pass.
 6. Never wait on a human. Anything that needs one is set to needs_human with the question, and the loop
    moves on.
 
@@ -151,6 +157,8 @@ Holds pipeline status. The tracker owns the ticket itself; SQLite holds our fiel
 | body | the description plus acceptance criteria, copied from the tracker by sync for triage |
 | status | new, needs_human, ready, in_progress, pr_open, done |
 | stage | implement, review, verify or fix, while in_progress; null (from before stages) reads as implement |
+| owner | the `$.session.id()` of the session whose pass claimed the ticket; a null one on an in_progress row (from before owners) is adopted by the next pass |
+| owner_seen | when the owner's pass last ran (SQLite `datetime('now')`) |
 | question | what it needs from you, when needs_human |
 | difficulty | 1-5 |
 | confidence | 0-1 |
@@ -186,5 +194,5 @@ CLAUDE.md, rules, the implementer prompts, readiness.md, rubric.md or checklists
 each change. Marks the PR learned.
 
 ## Not in this version
-Leases, a separate inbox (the needs_human status covers it), calibration dashboards, status band, guards, worktree management by the mod (the implementer makes its own). The mod runs the loop and nothing else.
+A separate inbox (the needs_human status covers it), calibration dashboards, status band, guards, worktree management by the mod (the implementer makes its own). The mod runs the loop and nothing else.
 Add any of these only when a real need shows up.

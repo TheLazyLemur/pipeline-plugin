@@ -18,6 +18,10 @@ export type Ticket = {
   stage: Stage | null
   /** 0 while the agents of `stage` are still to be started by the loop's pass; 1 once started. */
   started: 0 | 1
+  /** The `$.session.id()` of the session whose loop claimed the ticket; it alone moves the ticket's stages on. */
+  owner: string | null
+  /** When the owner's pass last ran, as SQLite `datetime('now')`; stale for 15 minutes, the owner is taken as stopped. */
+  owner_seen: string | null
   question: string | null
   difficulty: number | null
   confidence: number | null
@@ -38,6 +42,8 @@ export const SCHEMA = `create table if not exists tickets (
     check (status in ('new', 'needs_human', 'ready', 'in_progress', 'pr_open', 'done')),
   stage text check (stage in ('implement', 'review', 'verify', 'fix')),
   started integer not null default 1 check (started in (0, 1)),
+  owner text,
+  owner_seen text,
   question text,
   difficulty integer check (difficulty between 1 and 5),
   confidence real check (confidence between 0 and 1),
@@ -70,6 +76,8 @@ const ADDED: Record<string, string> = {
   body: 'text',
   stage: `text check (stage in ('implement', 'review', 'verify', 'fix'))`,
   started: 'integer not null default 1 check (started in (0, 1))',
+  owner: 'text',
+  owner_seen: 'text',
 }
 
 /** Applies SCHEMA, and adds the columns a database made before them is missing. */
