@@ -15,7 +15,10 @@ talk to the tracker. No adapter code: the file is instructions.
    - which tracker statuses mean a ticket is waiting to be worked (sync pulls these in as `new`),
    - which status to move a ticket to when the implementer starts, when its PR is open, and which mean done.
 3. **Write `.claude/pipeline/tracker.md`** with exact, copy-pasteable commands or tool calls for:
-   - listing the tickets waiting to be worked, with id, title and URL,
+   - listing the tickets waiting to be worked, with id, title and URL. Only work items one PR can finish:
+     filter out epics and other parent or container types in the command itself,
+   - listing one ticket's blockers (the tickets it is blocked by or depends on) with each one's status. If the
+     tracker has no such links, say so,
    - reading one ticket in full (description, acceptance criteria, comments),
    - moving a ticket's status,
    - adding a comment to a ticket,

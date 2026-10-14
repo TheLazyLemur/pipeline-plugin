@@ -30,3 +30,8 @@ Things SPEC.md does not settle. Built without them; each needs Daniel's call.
 10. **/learn edits the implementer prompts inside the plugin** (`agents/implementer-<model>.md`). If the plugin is
     installed from a marketplace, an update overwrites those edits. Should project-level overrides live in
     `.claude/pipeline/` instead?
+11. **Epics and blocked tickets are kept out by sync, from instructions alone.** tracker.md's list command
+    filters out epics, and tracker.md describes how to read a ticket's blockers. Sync skips a blocked ticket,
+    or removes it while it is still `new` or `ready`, and pulls it in once its blockers are done. The loop and
+    the table are unchanged. A tracker.md written before this has no blockers section, so nothing is held back
+    until /tracker-setup is run again.
