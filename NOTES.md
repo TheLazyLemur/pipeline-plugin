@@ -36,3 +36,10 @@ Things SPEC.md does not settle. Built without them; each needs Daniel's call.
     filtered by the waiting command itself. A tracker.md missing any of the three fails every pass with "run
     /tracker-setup", so a tracker.md written before this must be set up again. A tracker reachable only through
     an MCP server, with no CLI or HTTP API, cannot be synced this way.
+12. **The mod records the implementer's result, not the agent.** The implementer ends with `PR: <url>` or
+    `BLOCKED: <question>` as its last line; a `turn.complete` hook on the loop's `pipeline <ticket_id>` agents parses
+    it (`src/result.ts`) and writes the row with `lit()`. Any other ending sends the ticket to needs_human with the
+    answer's last 500 characters quoted. The write only applies while the ticket is still `in_progress`, so if a pass
+    ran the orphan rule first (agent no longer listed live before the hook wrote), the orphan question stands and the
+    PR url is only in the agent's answer. The orphan rule now covers only an implementer that never completes a turn
+    (crash, killed, session restart).

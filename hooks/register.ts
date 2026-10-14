@@ -1,5 +1,7 @@
 import type { Register } from 'claude-code'
 import { TAG, pass } from '../src/loop.ts'
+import { record } from '../src/result.ts'
+import { DB } from '../src/store.ts'
 
 const FIRST_MS = 10_000
 const EVERY_MS = 5 * 60_000
@@ -31,6 +33,22 @@ export const register: Register = on => {
     $.clock.after(FIRST_MS, tick)
     $.clock.every(EVERY_MS, tick)
     return started
+  })
+
+  // an implementer's final line is its result; one that never completes a turn is left to the orphan rule in pass
+  on('turn.complete', async ($, e, next) => {
+    const done = await next(e)
+    if (e.agentId === undefined) return done
+    const agent = (await $.agent.list()).find(a => a.id === e.agentId)
+    if (agent?.spawnedBy !== $.plugin.name || !agent.description.startsWith(`${TAG} `)) return done
+    const ticketId = agent.description.slice(TAG.length + 1)
+    try {
+      const root = await $.session.root()
+      $.ui.log(await record((argv, init) => $.process.run(argv, { cwd: root, ...init }), DB, ticketId, e.answer))
+    } catch (err) {
+      $.ui.log(`recording ${ticketId} failed: ${(err as Error).message}`)
+    }
+    return done
   })
 
   // the loop's agents finishing must not start a turn on the main thread
