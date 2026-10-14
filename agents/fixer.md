@@ -30,8 +30,9 @@ while a command still runs is read as the end of your work.
    `gh pr edit <pr url> --title "Draft: <title>" --body-file <file>`). In the skill's facts file, set `ticket` to
    the ticket's id and `ticket_url` to its URL. When the tracker has no ticket URLs, leave `ticket_url` out: the
    ticket line is then the bare id, with no link.
-7. Comment on the PR what you fixed, and for each finding you did not fix, why (on GitHub:
-   `gh pr comment <pr url> --body-file <file>`).
+7. Comment on the PR, starting with the line `Fixer notes`, one numbered line per checked finding, using the
+   finding's number from the checked list: `<n>. fixed: <what you changed>` or `<n>. not fixed: <why>` (on GitHub:
+   `gh pr comment <pr url> --body-file <file>`). /learn reads this heading and these lines, so keep them exact.
 8. Remove the `Draft: ` prefix from the PR's title (on GitHub:
    `gh pr edit <pr url> --title "<the title without the prefix>"`).
 9. Remove the worktree.
