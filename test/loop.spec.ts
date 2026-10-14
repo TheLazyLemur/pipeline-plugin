@@ -4,8 +4,8 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import type { AgentInfo, AgentSpawnArgs, AgentSpawnResult, ModelCompleteResult } from 'claude-code'
 import { type Deps, pass } from '../src/loop.ts'
-import { onReport } from '../src/result.ts'
-import { type Run, lit, sql } from '../src/store.ts'
+import { onReport } from '../pipeline-agents/src/result.ts'
+import { type Run, lit, sql } from '../pipeline-agents/src/store.ts'
 import { BLOCKERS, DONE, MARK_DONE, MERGED, WAITING } from '../src/sync.ts'
 import { freshProject } from './helpers.ts'
 
@@ -232,20 +232,23 @@ test('a refused spawn puts the ticket back to ready', async () => {
   assert.match(log.join('\n'), /T-1 not started: no verdict/)
 })
 
-test('a difficulty 3+ ticket whose implementer reports a PR moves to review and both reviewers start one tier up', async () => {
+test('a difficulty 3+ ticket whose implementer reports a PR moves to review, and the next pass starts both reviewers one tier up', async () => {
   // given
-  // ... a difficulty 3 opus ticket at stage implement, its implementer live, and the default review threshold
+  // ... a difficulty 3 opus ticket at stage implement and the default review threshold
   const { run, db } = await freshProject()
   await sql(run, db, `insert into tickets (ticket_id, title, status, stage, model, difficulty) values ('T-1', 'one', 'in_progress', 'implement', 'opus', 3)`)
   const { d, spawned } = deps(run, [])
 
   // when
-  // ... the implementer reports its draft PR
-  await onReport(d, live('pipeline T-1'), { status: 'pr_open', pr_url: 'https://git/pr/1' })
+  // ... the implementer reports its draft PR through pipeline-agents, then the loop's pass runs with no agent live
+  await onReport(run, 'pipeline', live('pipeline T-1'), { status: 'pr_open', pr_url: 'https://git/pr/1' })
+  const before = spawned.length
+  await pass(d)
 
   // then
-  // ... the ticket is at stage review and the spec and quality reviewers run on fable with the PR in their prompt
-  assert.deepEqual(await sql(run, db, `select status, stage, pr_url from tickets`), [{ status: 'in_progress', stage: 'review', pr_url: 'https://git/pr/1' }])
+  // ... the report started nothing; the pass started the spec and quality reviewers on fable with the PR in their prompt
+  assert.equal(before, 0)
+  assert.deepEqual(await sql(run, db, `select status, stage, started, pr_url from tickets`), [{ status: 'in_progress', stage: 'review', started: 1, pr_url: 'https://git/pr/1' }])
   assert.deepEqual(
     spawned.map(s => [s.description, s.subagentType, s.model]),
     [
@@ -266,7 +269,7 @@ test('a difficulty 1-2 ticket is told to open a normal PR and goes straight to p
   // when
   // ... a pass starts its implementer, which then reports a PR
   await pass(d)
-  await onReport(d, live('pipeline T-1'), { status: 'pr_open', pr_url: 'https://git/pr/1' })
+  await onReport(run, 'pipeline', live('pipeline T-1'), { status: 'pr_open', pr_url: 'https://git/pr/1' })
 
   // then
   // ... the implementer was told not to use the prefix, the ticket is pr_open and no reviewer started

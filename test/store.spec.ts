@@ -3,7 +3,7 @@ import { test } from 'node:test'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { lit, migrate, sql } from '../src/store.ts'
+import { lit, migrate, sql } from '../pipeline-agents/src/store.ts'
 import { freshDb, run } from './helpers.ts'
 
 test('ticket text with quotes and SQL in it round-trips unchanged', async () => {

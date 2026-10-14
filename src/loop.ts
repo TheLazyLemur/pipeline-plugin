@@ -1,7 +1,9 @@
 import type { AgentInfo, AgentSpawnArgs, AgentSpawnResult } from 'claude-code'
-import { DB, type Run, type Stage, type Ticket, lit, migrate, sql } from './store.ts'
+import { type Role, TAG, agentOf } from '../pipeline-agents/src/agents.ts'
+import { reviewFrom } from '../pipeline-agents/src/routing.ts'
+import { DB, type Run, type Stage, type Ticket, lit, migrate, sql } from '../pipeline-agents/src/store.ts'
 import { closeMerged, sync } from './sync.ts'
-import { type Complete, MODELS, UP, reviewFrom, triage } from './triage.ts'
+import { type Complete, MODELS, UP, triage } from './triage.ts'
 
 export type Deps = {
   /** `$.process.run` with the project root as cwd. */
@@ -13,24 +15,10 @@ export type Deps = {
   plugin: string
 }
 
-/** Every pipeline agent's description starts with this; the notification filter keys on it too. */
-export const TAG = 'pipeline'
 const LIVE: readonly string[] = ['pending', 'running', 'waiting']
-
-/** The review agents, `agents/<role>.md`, each described `pipeline <ticket_id> <role>`; the implementer is `pipeline <ticket_id>`. */
-export const ROLES = ['reviewer-spec', 'reviewer-quality', 'verifier', 'fixer'] as const
-export type Role = 'implementer' | (typeof ROLES)[number]
 
 /** The agents a stage starts. */
 const STARTS: Record<Exclude<Stage, 'implement'>, readonly Role[]> = { review: ['reviewer-spec', 'reviewer-quality'], verify: ['verifier'], fix: ['fixer'] }
-
-/** The ticket and role of an agent this plugin spawned for a ticket, or null for any other agent. */
-export const agentOf = (agent: AgentInfo | undefined, plugin: string): { ticket: string; role: Role } | null => {
-  if (agent?.spawnedBy !== plugin || !agent.description.startsWith(`${TAG} `)) return null
-  const rest = agent.description.slice(TAG.length + 1)
-  const role = ROLES.find(r => rest.endsWith(` ${r}`))
-  return role === undefined ? { ticket: rest, role: 'implementer' } : { ticket: rest.slice(0, -role.length - 1), role }
-}
 
 /** Spawns the agents of a stage the ticket has just entered: reviewers and verifier one tier up, the fixer on the routed model. Resolves what to log. */
 export const start = async (d: Pick<Deps, 'run' | 'spawn' | 'plugin'>, ticketId: string, stage: Exclude<Stage, 'implement'>): Promise<string> => {
@@ -51,6 +39,7 @@ export const start = async (d: Pick<Deps, 'run' | 'spawn' | 'plugin'>, ticketId:
     await sql(d.run, DB, `update tickets set status = 'needs_human', question = ${lit(question)} where ticket_id = ${lit(ticketId)} and status = 'in_progress'`)
     return `${ticketId} needs you: its ${role} could not start: ${s.deny}`
   }
+  await sql(d.run, DB, `update tickets set started = 1 where ticket_id = ${lit(ticketId)}`)
   return `${model} is at ${stage} for ${ticketId}`
 }
 
@@ -89,16 +78,20 @@ export const pass = async (d: Deps): Promise<string[]> => {
     }
   }
 
-  // 4. a stage with no agent of its ticket still live moves on: finished reviewers hand over to the verifier;
-  // any other agent gone with no result reported (crash, restart) leaves its ticket to a human
-  const busy = (await sql(d.run, DB, `select ticket_id, stage from tickets where status = 'in_progress' order by rowid`)) as Ticket[]
+  // 4. a stage with no agent of its ticket still live moves on: a stage report_result entered gets its agents started
+  // here, since only this plugin's spawns are heard by pipeline-agents (docs/adr/0001); finished reviewers hand over
+  // to the verifier; any other agent gone with no result reported (crash, restart) leaves its ticket to a human
+  const busy = (await sql(d.run, DB, `select ticket_id, stage, started from tickets where status = 'in_progress' order by rowid`)) as Ticket[]
   const working = new Set(live.map(a => agentOf(a, d.plugin)?.ticket))
   let waiting = 0
   for (const t of busy) {
     if (working.has(t.ticket_id)) waiting++
-    else if (t.stage === 'review') {
+    else if (t.started === 0 && t.stage !== null && t.stage !== 'implement') {
       waiting++
-      const moved = await sql(d.run, DB, `update tickets set stage = 'verify' where ticket_id = ${lit(t.ticket_id)} and status = 'in_progress' and stage = 'review' returning ticket_id`)
+      log.push(await start(d, t.ticket_id, t.stage))
+    } else if (t.stage === 'review') {
+      waiting++
+      const moved = await sql(d.run, DB, `update tickets set stage = 'verify', started = 0 where ticket_id = ${lit(t.ticket_id)} and status = 'in_progress' and stage = 'review' returning ticket_id`)
       if (moved.length > 0) log.push(await start(d, t.ticket_id, 'verify'))
     } else {
       const who = t.stage === 'verify' ? 'verifier' : t.stage === 'fix' ? 'fixer' : 'implementer'
@@ -118,7 +111,7 @@ export const pass = async (d: Deps): Promise<string[]> => {
   if (!MODELS.includes(next.model as (typeof MODELS)[number])) throw new Error(`${next.ticket_id} is ready with no routed model: ${next.model}`)
   if (next.difficulty === null) throw new Error(`${next.ticket_id} is ready with no difficulty`)
   const draft = next.difficulty >= reviewFrom(routing)
-  await sql(d.run, DB, `update tickets set status = 'in_progress', stage = 'implement' where ticket_id = ${lit(next.ticket_id)} and status = 'ready'`)
+  await sql(d.run, DB, `update tickets set status = 'in_progress', stage = 'implement', started = 1 where ticket_id = ${lit(next.ticket_id)} and status = 'ready'`)
   const s = await d.spawn({
     description: `${TAG} ${next.ticket_id}`,
     subagentType: `${d.plugin}:implementer-${next.model}`,

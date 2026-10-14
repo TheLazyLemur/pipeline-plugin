@@ -16,6 +16,8 @@ export type Ticket = {
   body: string | null
   status: Status
   stage: Stage | null
+  /** 0 while the agents of `stage` are still to be started by the loop's pass; 1 once started. */
+  started: 0 | 1
   question: string | null
   difficulty: number | null
   confidence: number | null
@@ -35,6 +37,7 @@ export const SCHEMA = `create table if not exists tickets (
   status text not null default 'new'
     check (status in ('new', 'needs_human', 'ready', 'in_progress', 'pr_open', 'done')),
   stage text check (stage in ('implement', 'review', 'verify', 'fix')),
+  started integer not null default 1 check (started in (0, 1)),
   question text,
   difficulty integer check (difficulty between 1 and 5),
   confidence real check (confidence between 0 and 1),
@@ -66,6 +69,7 @@ export const sql = async (run: Run, db: string, statement: string): Promise<Reco
 const ADDED: Record<string, string> = {
   body: 'text',
   stage: `text check (stage in ('implement', 'review', 'verify', 'fix'))`,
+  started: 'integer not null default 1 check (started in (0, 1))',
 }
 
 /** Applies SCHEMA, and adds the columns a database made before them is missing. */

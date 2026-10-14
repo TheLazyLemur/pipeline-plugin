@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { ProcessRunResult } from 'claude-code'
-import { DB, type Run, SCHEMA, sql } from '../src/store.ts'
+import { DB, type Run, SCHEMA, sql } from '../pipeline-agents/src/store.ts'
 import { BLOCKERS, DONE, MARK_DONE, MERGED, WAITING } from '../src/sync.ts'
 
 /** `$.process.run` over child_process. */

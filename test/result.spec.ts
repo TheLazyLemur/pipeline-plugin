@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { AgentInfo } from 'claude-code'
-import { dbRefusal, report, stop } from '../src/result.ts'
-import { sql } from '../src/store.ts'
+import { dbRefusal, report, stop } from '../pipeline-agents/src/result.ts'
+import { sql } from '../pipeline-agents/src/store.ts'
 import { freshDb, run } from './helpers.ts'
 
 const implementer = { description: 'pipeline T-1', status: 'running', spawnedBy: 'pipeline' } as AgentInfo

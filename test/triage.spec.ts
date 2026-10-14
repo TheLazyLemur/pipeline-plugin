@@ -2,8 +2,9 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import type { ModelCompleteRequest, ModelCompleteResult } from 'claude-code'
-import { sql } from '../src/store.ts'
-import { reviewFrom, triage } from '../src/triage.ts'
+import { sql } from '../pipeline-agents/src/store.ts'
+import { reviewFrom } from '../pipeline-agents/src/routing.ts'
+import { triage } from '../src/triage.ts'
 import { freshDb, run } from './helpers.ts'
 
 const guides = { readiness: 'Has acceptance criteria.', rubric: '1 trivial .. 5 hard.', routing: '1-2 sonnet' }

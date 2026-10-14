@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { sql } from '../src/store.ts'
+import { sql } from '../pipeline-agents/src/store.ts'
 import { sync } from '../src/sync.ts'
 import { freshDb, run } from './helpers.ts'
 

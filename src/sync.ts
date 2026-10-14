@@ -1,4 +1,4 @@
-import { type Run, lit, sql } from './store.ts'
+import { type Run, lit, sql } from '../pipeline-agents/src/store.ts'
 
 /** The headings in tracker.md whose first fenced block is a shell command printing a JSON array. */
 export const WAITING = 'List the tickets waiting to be worked'

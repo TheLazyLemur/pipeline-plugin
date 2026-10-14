@@ -6,11 +6,15 @@ You keep the main thread for spec, plan and review, and are only pulled in when 
 
 ## Run it
 
-Load the plugin for one session:
+The pipeline is two plugins from this repo: `pipeline` (the repo root) runs the loop, and `pipeline-agents` (the
+`pipeline-agents/` folder) holds the hooks its agents need (see `docs/adr/0001`). Load both for one session:
 
 ```sh
-claude --plugin-dir /path/to/pipeline-plugin
+claude --plugin-dir /path/to/pipeline-plugin --plugin-dir /path/to/pipeline-plugin/pipeline-agents
 ```
+
+`pipeline` declares `pipeline-agents` under `dependencies`. With only `pipeline` loaded, the loop runs but no
+agent's result is ever recorded.
 
 Then, in your project:
 

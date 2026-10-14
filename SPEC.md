@@ -61,8 +61,17 @@ A waiting ticket with a blocker that is not done is held: sync does not insert i
 `new` or `ready`. A held ticket has no row and no status. It enters the table once its blockers are done.
 `/pipeline-status` lists held tickets live from the blockers command.
 
+### Two plugins
+A plugin's hooks never run for agents that the same plugin spawned from its own code, and every pipeline agent is
+spawned from the loop's timer (`docs/adr/0001`). So the repo ships two plugins. `pipeline` (the repo root) runs the
+loop: the timer, sync, triage, spawning every agent, and the notice filter. `pipeline-agents` (`pipeline-agents/`)
+holds every hook that must hear those agents: `report_result`, the `pipeline.db` guard, the `tool.check` allow and
+the `SubagentStop` guard. It recognises them as agents spawned by `pipeline`. The code both use (the store, agent
+identity, results, the review threshold) lives in `pipeline-agents/src/`, since a plugin can import only from inside
+its own folder; `src/` holds the loop's own code. `pipeline` declares `pipeline-agents` under `dependencies`.
+
 ### The agents' results
-The mod registers a `report_result` tool (`mcp__pipeline__report_result`, schema `{status: "pr_open" | "reviewed"
+The `pipeline-agents` plugin registers a `report_result` tool (`mcp__pipeline-agents__report_result`, schema `{status: "pr_open" | "reviewed"
 | "blocked", pr_url?, findings?, question?}`). The implementer, the verifier and the fixer finish by calling it and
 never touch the database: a second `tool.call` hook refuses any Bash command of the loop's agents that mentions
 `pipeline.db`, pointing them at the tool (tracker.db and every other file still run). The tool's `tool.call` hook
@@ -72,15 +81,16 @@ never touch the database: a second `tool.call` hook refuses any Bash command of 
 | reporter | result | ticket |
 |---|---|---|
 | implementer | pr_open, difficulty below the review threshold, or a ticket started before stages (null stage) | `pr_open` with `pr_url` |
-| implementer | pr_open, difficulty at or above the threshold | stage `review` with `pr_url`; both reviewers spawned |
+| implementer | pr_open, difficulty at or above the threshold | stage `review` with `pr_url`; the next pass spawns both reviewers |
 | verifier | reviewed, 0 findings | `pr_open` |
-| verifier | reviewed, more than 0 findings | stage `fix`; the fixer spawned |
+| verifier | reviewed, more than 0 findings | stage `fix`; the next pass spawns the fixer |
 | fixer | pr_open | `pr_open` with `pr_url` |
 | any | blocked | `needs_human` with `question` |
 
-The write applies only while the ticket is `in_progress` at the reporter's stage, and a log line is written only
-when a row changed. The agents of the next stage are spawned in the same hook, while the reporter is still live, so
-a pass never takes the new stage for finished. A `classic.SubagentStop` hook blocks an implementer, verifier or
+The write applies only while the ticket is `in_progress` at the reporter's stage. A stage it moves the ticket into
+is left with `started = 0`; the loop's next pass spawns that stage's agents and sets `started = 1`, so a pass never
+takes an unstarted stage for finished. The hook does not spawn them itself: an agent spawned from `pipeline-agents`
+would be nested in it, and its own calls would skip these hooks (`docs/adr/0001`). A `classic.SubagentStop` hook blocks an implementer, verifier or
 fixer whose ticket is still at its stage from stopping once, with a reason telling it to call the tool; if it stops
 again, the ticket goes to needs_human. The stage check in each pass covers an agent that crashes or is killed. The
 implementer and the fixer work in their own git worktree, so they never switch branches in the checkout you are

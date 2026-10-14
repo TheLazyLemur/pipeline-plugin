@@ -1,0 +1,6 @@
+{
+  "name": "pipeline-agents",
+  "version": "0.1.0",
+  "author": { "name": "Dan Rousseau" },
+  "description": "The hooks the pipeline loop's agents need: report_result, the pipeline.db guard, the permission allow and the stop guard. Installed with pipeline."
+}

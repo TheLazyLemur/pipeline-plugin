@@ -14,11 +14,10 @@ Things SPEC.md does not settle. Everything else the build decided is described i
 5. **"Has reported" is read from the ticket**, not tracked per agent: the SubagentStop hook blocks while the ticket
    is still `in_progress`. A report that was refused (missing field) leaves it `in_progress`, so the agent is told
    to call the tool again. Track calls per agent instead?
-6. **Agent review spawns from two places.** The reviewers and the fixer are spawned by the `report_result` hook,
-   while the reporting agent is still live; the verifier by the pass, once no agent of the ticket is live. The
-   table has no "spawned" marker, so the pass alone cannot tell a stage whose agent has not started from one whose
-   agent is gone. A `review`/`fix` stage whose spawn throws (not denied) is logged only: at `review` the pass then
-   starts the verifier with no reviews. Add a marker instead?
+6. **Decided: every agent is spawned by the loop's pass.** `report_result` only records and leaves a new stage
+   `started = 0`; the pass spawns its agents and sets `started = 1`. The hook cannot spawn them: they would be nested
+   in `pipeline-agents` and skip its hooks (`docs/adr/0001`). The cost is up to one pass interval (5 minutes) between
+   a report and the next stage's agents.
 7. **Tickets started before stages are not reviewed.** A null stage is read as `implement`, but an implementer with
    a null stage was not told to open a draft, so its PR goes straight to `pr_open` whatever its difficulty.
 8. **A routing.md without `Review threshold:` reviews from 3**, so no re-setup is needed after a pull. A malformed
