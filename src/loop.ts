@@ -16,7 +16,7 @@ export type Deps = {
 
 /** Every pipeline agent's description starts with this; the notification filter keys on it too. */
 export const TAG = 'pipeline'
-const SYNC = `${TAG} sync`
+export const SYNC = `${TAG} sync`
 const LIVE: readonly string[] = ['pending', 'running', 'waiting']
 
 const read = async (run: Run, name: string) => {
@@ -54,7 +54,7 @@ export const pass = async (d: Deps): Promise<string[]> => {
     }
   }
 
-  // 3. an implementer that ended without recording a result leaves its ticket to a human
+  // 3. an implementer gone with no result recorded at turn.complete (crash, restart) leaves its ticket to a human
   const busy = (await sql(d.run, DB, `select ticket_id from tickets where status = 'in_progress'`)) as Ticket[]
   const orphans = busy.filter(t => !live.includes(`${TAG} ${t.ticket_id}`))
   for (const t of orphans) {
