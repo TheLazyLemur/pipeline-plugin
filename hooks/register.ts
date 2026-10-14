@@ -1,7 +1,7 @@
 import type { Register } from 'claude-code'
-import { TAG, pass } from '../src/loop.ts'
-import { REPORT_TOOL, report, stop, ticketOf } from '../src/result.ts'
-import { DB } from '../src/store.ts'
+import { TAG, agentOf, pass } from '../src/loop.ts'
+import { REPORT_TOOL, onReport, stop } from '../src/result.ts'
+import { DB, type Run } from '../src/store.ts'
 
 const FIRST_MS = 10_000
 const EVERY_MS = 5 * 60_000
@@ -37,21 +37,22 @@ export const register: Register = on => {
     return started
   })
 
-  // the implementer's result; refused for any other caller, written only while its ticket is in_progress
+  // a pipeline agent's result; refused for any other caller, written only while its ticket is at that agent's stage
   on('tool.call', async ($, e, next) => {
     if (e.tool !== `mcp__${$.plugin.name}__${REPORT_TOOL.name}`) return next(e)
     const agent = (await $.agent.list()).find(a => a.id === e.agentId)
     try {
       const root = await $.session.root()
-      const line = await report((argv, init) => $.process.run(argv, { cwd: root, ...init }), DB, $.plugin.name, agent, e as Record<string, unknown>)
-      if (line !== null) $.ui.log(line)
-      return { result: line === null ? 'Not recorded: the ticket is no longer in progress.' : 'Recorded.' }
+      const run: Run = (argv, init) => $.process.run(argv, { cwd: root, ...init })
+      const lines = await onReport({ run, spawn: args => $.agent.spawn(args), plugin: $.plugin.name }, agent, e as Record<string, unknown>)
+      for (const line of lines ?? []) $.ui.log(line)
+      return { result: lines === null ? 'Not recorded: the ticket is no longer at your stage.' : 'Recorded.' }
     } catch (err) {
       return { deny: (err as Error).message }
     }
   })
 
-  // an implementer must report before it stops: blocked once, then its ticket goes to a human
+  // an implementer, verifier or fixer must report before it stops: blocked once, then its ticket goes to a human
   on('classic.SubagentStop', async ($, e, next) => {
     const done = await next(e)
     const agent = (await $.agent.list()).find(a => a.id === e.agent_id)
@@ -66,7 +67,7 @@ export const register: Register = on => {
     const verdict = await next(e)
     if (verdict.decision !== 'ask' || e.agentId === undefined || (e.ceiling !== undefined && e.ceiling !== 'allow')) return verdict
     const agent = (await $.agent.list()).find(a => a.id === e.agentId)
-    return ticketOf(agent, $.plugin.name) !== null ? { decision: 'allow', reason: `${$.plugin.name} allows its own agents' calls` } : verdict
+    return agentOf(agent, $.plugin.name) !== null ? { decision: 'allow', reason: `${$.plugin.name} allows its own agents' calls` } : verdict
   })
 
   // the loop's agents finishing must not start a turn on the main thread
