@@ -14,9 +14,11 @@ sync, and the instructions its agents follow to talk to the tracker. No adapter 
 2. **Read the board's statuses** and agree with the user on the mapping:
    - which tracker statuses mean a ticket is waiting to be worked (sync pulls these in as `new`),
    - which status to move a ticket to when the implementer starts, when its PR is open, and which mean done.
-3. **Write `.claude/pipeline/tracker.md`.** The pipeline's mod runs three sync commands itself. Each goes in the
+3. **Write `.claude/pipeline/tracker.md`.** The pipeline's mod runs five commands itself. Each goes in the
    first fenced code block under its own heading, spelled exactly as below, and is run with `sh -c` from the
-   project root. Each must print one JSON array (or nothing, meaning none), with exactly these fields:
+   project root. A tracker.md missing any of them fails every loop pass with "run /tracker-setup".
+
+   The three sync commands each print one JSON array (or nothing, meaning none), with exactly these fields:
    - `## List the tickets waiting to be worked` prints `[{"id", "title", "url", "body"}]`, `url` null when there is
      none, `body` the description followed by the acceptance criteria (triage judges the ticket from it). Only work items one PR can finish: filter out epics and other parent or container types in the
      command itself.
@@ -25,8 +27,19 @@ sync, and the instructions its agents follow to talk to the tracker. No adapter 
      ticket to a ticket it is blocked by or depends on, `blocker_done` true when that ticket is in a done
      status. When the tracker has no such links, the command prints `[]`.
 
-   `id` and `blocked_by` are the tracker's ids, as strings or integers. Run each command and check its output
-   before saving. Then add exact, copy-pasteable commands or tool calls, which the agents follow, for:
+   `id` and `blocked_by` are the tracker's ids, as strings or integers.
+
+   Each loop pass, before syncing, the mod runs two more for every ticket whose PR is open, so a merged blocker
+   releases its dependents in the same pass. Each gets one value as `$1`, passed as an argument and never
+   spliced into the command: always quote it as `"$1"`, and never paste it into a query string unchecked.
+   - `## Check whether a PR is merged` gets the PR URL as `$1` and prints `{"merged": true}` or
+     `{"merged": false}`; anything else fails the pass. On GitHub:
+     `gh pr view "$1" --json state --jq '{merged: (.state == "MERGED")}'`. Use the PR host's CLI or API.
+   - `## Mark a ticket done` gets the tracker ticket id as `$1` and moves it to the done status, exiting
+     non-zero on failure. It must succeed when the ticket is already done (some trackers close on merge).
+
+   Run each command and check its output before saving: the merge check on one merged and one open PR, and
+   mark-done only with the user's go-ahead, on a ticket they name. Then add exact, copy-pasteable commands or tool calls, which the agents follow, for:
    - reading one ticket in full (description, acceptance criteria, comments),
    - moving a ticket's status,
    - adding a comment to a ticket,

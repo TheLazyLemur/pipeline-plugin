@@ -1,6 +1,6 @@
 import type { AgentInfo, AgentSpawnArgs, AgentSpawnResult } from 'claude-code'
 import { DB, type Run, type Ticket, lit, migrate, sql } from './store.ts'
-import { sync } from './sync.ts'
+import { closeMerged, sync } from './sync.ts'
 import { type Complete, MODELS, triage } from './triage.ts'
 
 export type Deps = {
@@ -22,7 +22,7 @@ const read = async (run: Run, name: string) => {
   return r.exitCode === 0 ? r.stdout : null
 }
 
-/** One pass: sync, triage every new ticket, spawn the implementer for the next ready one if none is running. Resolves what to log. */
+/** One pass: mark merged PRs done, sync, triage every new ticket, spawn the implementer for the next ready one if none is running. Resolves what to log. */
 export const pass = async (d: Deps): Promise<string[]> => {
   const [tracker, readiness, rubric, routing] = await Promise.all([
     read(d.run, 'tracker'),
@@ -35,10 +35,13 @@ export const pass = async (d: Deps): Promise<string[]> => {
   const log: string[] = []
   const live = (await d.agents()).filter(a => a.spawnedBy === d.plugin && LIVE.includes(a.status)).map(a => a.description)
 
-  // 1. sync, so what it adds is triaged in this pass
+  // 1. a merged PR marks its ticket done before sync, so dependents it was holding are released in this pass
+  for (const id of await closeMerged(d.run, DB, tracker)) log.push(`${id} is done: its PR merged`)
+
+  // 2. sync, so what it adds is triaged in this pass
   await sync(d.run, DB, tracker)
 
-  // 2. triage; a failed ticket stays new and is retried next pass
+  // 3. triage; a failed ticket stays new and is retried next pass
   const fresh = (await sql(d.run, DB, `select ticket_id, title, url, body from tickets where status = 'new' order by rowid`)) as Ticket[]
   for (const t of fresh) {
     try {
@@ -49,7 +52,7 @@ export const pass = async (d: Deps): Promise<string[]> => {
     }
   }
 
-  // 3. an implementer gone with no result recorded at turn.complete (crash, restart) leaves its ticket to a human
+  // 4. an implementer gone with no result recorded at turn.complete (crash, restart) leaves its ticket to a human
   const busy = (await sql(d.run, DB, `select ticket_id from tickets where status = 'in_progress'`)) as Ticket[]
   const orphans = busy.filter(t => !live.includes(`${TAG} ${t.ticket_id}`))
   for (const t of orphans) {

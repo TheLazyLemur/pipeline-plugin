@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { ProcessRunResult } from 'claude-code'
 import { DB, type Run, SCHEMA, sql } from '../src/store.ts'
-import { BLOCKERS, DONE, WAITING } from '../src/sync.ts'
+import { BLOCKERS, DONE, MARK_DONE, MERGED, WAITING } from '../src/sync.ts'
 
 /** `$.process.run` over child_process. */
 export const run: Run = async (argv, init) => {
@@ -25,15 +25,15 @@ export const freshDb = async () => {
   return db
 }
 
-/** A project set up as /tracker-setup leaves it, with the schema applied; `run` already has it as cwd. */
+/** A project set up as /tracker-setup leaves it, with the schema applied; `run` already has it as cwd, `root` is its path. */
 export const freshProject = async () => {
   const root = mkdtempSync(join(tmpdir(), 'pipeline-project-'))
   mkdirSync(join(root, '.claude/pipeline'), { recursive: true })
   for (const name of ['readiness', 'rubric', 'routing']) writeFileSync(join(root, `.claude/pipeline/${name}.md`), `# ${name}\n`)
-  // a tracker with nothing in it: each sync command prints no rows
-  const empty = [WAITING, DONE, BLOCKERS].map(h => `## ${h}\n\`\`\`sh\ntrue\n\`\`\`\n`).join('')
-  writeFileSync(join(root, '.claude/pipeline/tracker.md'), `# tracker\n${empty}`)
+  // a tracker with nothing in it: each sync command prints no rows and no PR has merged
+  const empty = [WAITING, DONE, BLOCKERS, MARK_DONE].map(h => `## ${h}\n\`\`\`sh\ntrue\n\`\`\`\n`).join('')
+  writeFileSync(join(root, '.claude/pipeline/tracker.md'), `# tracker\n${empty}## ${MERGED}\n\`\`\`sh\necho '{"merged": false}'\n\`\`\`\n`)
   const inRoot: Run = (argv, init) => run(argv, { cwd: root, ...init })
   await sql(inRoot, DB, SCHEMA)
-  return { run: inRoot, db: DB }
+  return { run: inRoot, db: DB, root }
 }

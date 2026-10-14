@@ -43,3 +43,11 @@ Things SPEC.md does not settle. Built without them; each needs Daniel's call.
     ran the orphan rule first (agent no longer listed live before the hook wrote), the orphan question stands and the
     PR url is only in the agent's answer. The orphan rule now covers only an implementer that never completes a turn
     (crash, killed, session restart).
+13. **The loop marks merged PRs done** (docs/specs/dependency-flow.md). Before sync, each `pr_open` ticket's
+    `pr_url` goes to tracker.md's `## Check whether a PR is merged` (prints `{"merged": true|false}`); when merged,
+    `## Mark a ticket done` runs with the ticket id and the row goes to `done`, so sync releases its dependents in
+    the same pass. Both commands get their value as `$1` (`sh -c '<command>' sh <value>`), never spliced in. A
+    tracker.md missing either fails every pass with "run /tracker-setup", so a tracker.md written before this must
+    be set up again. Any failure of either command (non-zero exit, other output, a `pr_open` row with no
+    `pr_url`) fails the whole pass, like a failing sync command; a PR host that is down stalls the loop until it
+    is back. `/pipeline-status` lists held tickets from the blockers command, live; there is no held status.

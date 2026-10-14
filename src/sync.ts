@@ -4,6 +4,9 @@ import { type Run, lit, sql } from './store.ts'
 export const WAITING = 'List the tickets waiting to be worked'
 export const DONE = 'List the tickets that are done'
 export const BLOCKERS = 'List the blockers'
+/** The headings whose command takes one value as `$1`: a PR URL, then a tracker ticket id. */
+export const MERGED = 'Check whether a PR is merged'
+export const MARK_DONE = 'Mark a ticket done'
 
 type Row = Record<string, unknown>
 
@@ -21,6 +24,36 @@ const list = async (run: Run, tracker: string, heading: string): Promise<Row[]> 
   const rows: unknown = r.stdout.trim() === '' ? [] : JSON.parse(r.stdout)
   if (!Array.isArray(rows) || !rows.every(row => typeof row === 'object' && row !== null)) throw new Error(`"${heading}" did not print a JSON array of objects`)
   return rows
+}
+
+/** Runs one tracker.md command with `value` as its `$1`, so the value is never read as shell text. */
+const call = async (run: Run, cmd: string, heading: string, value: string) => {
+  const r = await run(['sh', '-c', cmd, 'sh', value])
+  if (r.exitCode !== 0) throw new Error(`"${heading}" exited ${r.exitCode} for ${value}: ${r.stderr.trim()}`)
+  return r.stdout.trim()
+}
+
+/** Marks done, in the tracker and the table, every pr_open ticket whose PR has merged, so sync can release its dependents. Resolves the ids marked. */
+export const closeMerged = async (run: Run, db: string, tracker: string): Promise<string[]> => {
+  // both are looked up first, so a tracker.md without them fails even when no PR is open
+  const [merged, markDone] = [command(tracker, MERGED), command(tracker, MARK_DONE)]
+  const open = await sql(run, db, `select ticket_id, pr_url from tickets where status = 'pr_open' order by rowid`)
+  const closed: string[] = []
+  for (const t of open) {
+    const ticket = String(t.ticket_id)
+    if (typeof t.pr_url !== 'string') throw new Error(`${ticket} is pr_open with no pr_url`)
+    const out = await call(run, merged, MERGED, t.pr_url)
+    let answer = ''
+    try {
+      answer = JSON.stringify(JSON.parse(out))
+    } catch {}
+    if (answer !== '{"merged":true}' && answer !== '{"merged":false}') throw new Error(`"${MERGED}" printed ${JSON.stringify(out.slice(0, 200))} for ${t.pr_url}, not {"merged": true|false}`)
+    if (answer === '{"merged":false}') continue
+    await call(run, markDone, MARK_DONE, ticket)
+    await sql(run, db, `update tickets set status = 'done' where ticket_id = ${lit(ticket)} and status = 'pr_open'`)
+    closed.push(ticket)
+  }
+  return closed
 }
 
 const bad = (heading: string, row: Row, field: string): never => {
