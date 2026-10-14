@@ -2,6 +2,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test 'test/*.spec.ts'"
+    "test": "node --test 'test/*.spec.ts'",
+    "test:plugin": "claude plugin test pipeline-agents"
   }
 }

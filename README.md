@@ -64,3 +64,15 @@ pass moves on. An `in_progress` ticket whose implementer, verifier or fixer is n
 A ticket blocked by another in the tracker is held until its blocker is done; marking merged PRs done before
 sync releases it in the same pass, so it is built on its blocker's merged code. `/pipeline:pipeline-status`
 lists held tickets and what holds each.
+
+## Tests
+
+```sh
+npm test              # unit tests, under node
+npm run test:plugin   # claude plugin test pipeline-agents
+```
+
+The plugin test (`pipeline-agents/test/report-result.test.ts`) loads `pipeline-agents` with a stand-in for the loop
+named `pipeline`, and checks that an agent `pipeline` spawned from its timer gets its `report_result` call answered,
+and would not if `pipeline` owned the tool. Run it on the `pipeline-agents` folder: `claude plugin test .` at the
+repo root runs it with the real `pipeline` loaded as well, and fails with `pipeline is loaded twice`.
