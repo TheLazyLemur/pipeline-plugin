@@ -1,5 +1,6 @@
 import type { AgentInfo, AgentSpawnArgs, AgentSpawnResult } from 'claude-code'
 import { DB, type Run, SCHEMA, type Ticket, lit, sql } from './store.ts'
+import { sync } from './sync.ts'
 import { type Complete, MODELS, triage } from './triage.ts'
 
 export type Deps = {
@@ -8,15 +9,12 @@ export type Deps = {
   complete: Complete
   spawn: (args: AgentSpawnArgs) => Promise<AgentSpawnResult>
   agents: () => Promise<AgentInfo[]>
-  /** `$.plugin.root`. */
-  pluginRoot: string
   /** `$.plugin.name`, which namespaces the implementer agents. */
   plugin: string
 }
 
 /** Every pipeline agent's description starts with this; the notification filter keys on it too. */
 export const TAG = 'pipeline'
-const SYNC = `${TAG} sync`
 const LIVE: readonly string[] = ['pending', 'running', 'waiting']
 
 const read = async (run: Run, name: string) => {
@@ -37,11 +35,8 @@ export const pass = async (d: Deps): Promise<string[]> => {
   const log: string[] = []
   const live = (await d.agents()).filter(a => a.spawnedBy === d.plugin && LIVE.includes(a.status)).map(a => a.description)
 
-  // 1. sync: an agent following tracker-sync; what it adds is triaged next pass
-  if (!live.includes(SYNC)) {
-    const s = await d.spawn({ description: SYNC, model: 'haiku', prompt: `Read ${d.pluginRoot}/skills/tracker-sync/SKILL.md and follow it.` })
-    if (s.deny !== undefined) log.push(`sync not started: ${s.deny}`)
-  }
+  // 1. sync, so what it adds is triaged in this pass
+  await sync(d.run, DB, tracker)
 
   // 2. triage; a failed ticket stays new and is retried next pass
   const fresh = (await sql(d.run, DB, `select ticket_id, title, url from tickets where status = 'new' order by rowid`)) as Ticket[]

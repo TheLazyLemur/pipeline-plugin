@@ -18,7 +18,6 @@ export const register: Register = on => {
           complete: request => $.model.complete(request),
           spawn: args => $.agent.spawn(args),
           agents: () => $.agent.list(),
-          pluginRoot: $.plugin.root,
           plugin: $.plugin.name,
         })
         for (const line of lines) $.ui.log(line)
