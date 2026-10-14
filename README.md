@@ -30,8 +30,10 @@ flowchart TD
     start([Timer fires]) --> setup{"`.claude/pipeline` set up?"}
     setup -- no --> stop(["Log: run /tracker-setup"])
     setup -- yes --> merged[Each pr_open ticket whose PR merged: mark done in the tracker and the table]
-    merged --> sync[Sync: pull new and changed tickets from the tracker, holding back any with a blocker not done]
-    sync --> triage[Triage every new ticket with Haiku]
+    merged --> sync[Sync: pull new and changed tickets from the tracker]
+    sync --> held{Blocker not done?}
+    held -- yes --> hold([Ticket held out of the table until its blocker is done])
+    held -- no --> triage[Triage every new ticket with Haiku]
     triage --> verdict{Ready?}
     verdict -- no --> nh[needs_human: question stored on the ticket]
     verdict -- yes --> ready[ready: difficulty scored, model routed]
