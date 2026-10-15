@@ -71,7 +71,7 @@ pipeline plugin ships no adapter.
 | `comment` | `id`, `text` | ok |
 | `link_pr` | `id`, `url` | ok |
 | `pr_create` | `branch`, `title`, `body`, `draft` | `{url}`; `draft: true` opens a host draft titled `Draft: <title>` |
-| `pr_view` | `url` | `{title, branch, head, draft, merged}` |
+| `pr_view` | `url` | `{title, branch, head, draft, merged, closed}` |
 | `pr_merged` | `url` | `{merged: true\|false}` |
 | `pr_diff` | `url` | the diff, as text |
 | `pr_comment` | `url`, `text` | ok |
@@ -214,8 +214,8 @@ responses); run the read ops live once (`waiting`, `done`, `blockers`, `read`, `
 responses for the tests, then the tests with `claude plugin test`, saving nothing until both pass; ask whether to
 commit the mod, gitignore it or exclude it through `.git/info/exclude`; and copy the defaults for `readiness.md`,
 `rubric.md` and `routing.md` from `skills/tracker-setup/defaults/` into `.claude/pipeline/` when absent, gitignoring
-`@@DB@@`. It never writes to a real ticket or PR while checking. A new tracker means running this skill again.
-Credentials stay in the MCP server's or CLI's own login or an env var the mod names, never in the mod.
+`.claude/pipeline/pipeline.db`. It never writes to a real ticket or PR while checking. A new tracker means running
+this skill again. Credentials stay in the MCP server's or CLI's own login or an env var the mod names, never in the mod.
 
 ### `/pipeline-status` (skill)
 Shows counts by status, tickets in progress with their stage and open PRs, what each ticket cost (tokens and

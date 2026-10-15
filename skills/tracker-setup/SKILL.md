@@ -29,7 +29,7 @@ answers `{result}`, the value below as a JSON value (never JSON text), `ok` as t
 | `comment` | `id`, `text` | ok |
 | `link_pr` | `id`, `url` | ok |
 | `pr_create` | `branch`, `title`, `body`, `draft` | `{url}` |
-| `pr_view` | `url` | `{title, branch, head, draft, merged}` |
+| `pr_view` | `url` | `{title, branch, head, draft, merged, closed}` |
 | `pr_merged` | `url` | `{merged: true\|false}` |
 | `pr_diff` | `url` | the diff, as text |
 | `pr_comment` | `url`, `text` | ok |
@@ -50,7 +50,7 @@ answers `{result}`, the value below as a JSON value (never JSON text), `ok` as t
 - `pr_create`: the branch is already pushed; the mod runs no git. With `draft: true` it opens a host draft titled
   `Draft: <title>`; on a host without drafts, the prefix alone marks it. `pr_ready` marks the PR ready on the host
   and strips the `Draft: ` prefix, in one call. `head` in `pr_view` is the head commit's sha; `draft` is true while
-  either the host draft or the prefix stands.
+  either the host draft or the prefix stands; `closed` is true once the PR is closed, merged or not.
 
 ## Steps
 
