@@ -19,8 +19,12 @@ while a command still runs is read as the end of your work.
    is working there, and a guard refuses your edits there and any state-changing git command not placed in your
    worktree (`cd <that path> && …` or `git -C <that path> …`).
 3. Implement the ticket, following the project's CLAUDE.md and rules. Add or update tests for the behaviour.
+   For a bug fix, revert the fix and watch each new test fail, then restore it: a test that stays green without
+   the fix does not test it.
 4. Run the tests. Do not open a PR with failing tests. Run every command you added or changed in a skill, prompt
    or script from the project root, the way an agent would invoke it, not from the skill's own folder.
+   Then search code comments, docstrings, test descriptions, docs and READMEs for wording that describes the
+   behaviour you changed or removed, and update it in the same PR.
 5. Write the PR's title and description with the `pipeline:writing-pull-requests` skill: load it and follow it.
    Run its `check` on the body and the title, and do not open the PR until `check` passes. When the PR must be a
    draft, put `Draft: ` in front of the title the skill produces, and run `check` on the title without the prefix.
