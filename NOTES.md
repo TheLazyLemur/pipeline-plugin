@@ -42,3 +42,9 @@ Things SPEC.md does not settle. Everything else the build decided is described i
     they have instead? The limits fail open: an error in either hook (a sqlite failure, a typo such as
     `Agent time limit: 2h` in routing.md) is logged in the pipeline log and the request or call runs unlimited. One pair of limits serves every model and role until ticket 22's
     usage shows how to tune them. A request with no `usage` leaves the context of the last one that had it.
+13. **The worktree guard stops accidents, not deliberate evasion.** It checks `Edit`, `Write`, `NotebookEdit` and
+    the git commands a Bash command line starts with (after `cd`, `git -C`, a wrapper such as `rtk` or `env`).
+    General shell writes in the main checkout (`sed -i`, `>`, `mv`, `rm`, `cp`, scripts) are not detected, nor is
+    git run through another command (`sh -c 'git commit'`, `xargs git`, a Makefile or npm script). Paths are
+    resolved as text, so a symlink into the main checkout gets through, and a subshell's `cd` is taken to persist.
+    Only the main checkout is protected: a worktree of another ticket or any other folder on disk is not.

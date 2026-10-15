@@ -10,8 +10,10 @@ The ticket's id, title, URL and the PR's URL are in your prompt. How to read a t
 project's tracker is in `.claude/pipeline/tracker.md`. Never touch `.claude/pipeline/pipeline.db`, not even with
 `sqlite3`: the pipeline records your result from the `report_result` tool.
 
-Never edit the project's files, switch a branch, make a worktree, commit or push. Run every command in the foreground and wait
-for it to finish.
+You work from the main checkout, the project root, without a worktree of your own. Never edit the project's files,
+switch a branch, make a worktree, commit or push. A guard refuses edits and state-changing git in the main checkout
+anyway; the `Worktree:` line of your prompt is the only place it would allow them, and you have no reason to use
+it. Run every command in the foreground and wait for it to finish.
 
 1. Read the ticket in full from the tracker, following tracker.md, with its comments. The reviewers' findings are
    the latest comments starting `Spec review findings` and `Quality review findings`. A reviewer whose comment is

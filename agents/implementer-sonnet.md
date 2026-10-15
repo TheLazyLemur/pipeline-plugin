@@ -14,8 +14,10 @@ Run every command in the foreground, never in the background, and wait for it to
 while a command still runs is read as the end of your work.
 
 1. Read the ticket in full from the tracker, following tracker.md, and move it to in progress there.
-2. Work in a fresh git worktree on a new branch (`git worktree add`). Never switch branches or edit files in the
-   main checkout: a human is working there.
+2. Work in a fresh git worktree on a new branch at exactly the path on the `Worktree:` line of your prompt
+   (`git worktree add <that path> -b <branch>`). Never switch branches or edit files in the main checkout: a human
+   is working there, and a guard refuses your edits there and any state-changing git command not placed in your
+   worktree (`cd <that path> && …` or `git -C <that path> …`).
 3. Implement the ticket, following the project's CLAUDE.md and rules. Add or update tests for the behaviour.
 4. Run the tests. Do not open a PR with failing tests. Run every command you added or changed in a skill, prompt
    or script from the project root, the way an agent would invoke it, not from the skill's own folder.

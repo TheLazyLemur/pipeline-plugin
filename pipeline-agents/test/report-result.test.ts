@@ -311,6 +311,7 @@ test(
     // given
     // ... a session with the loop stand-in and pipeline-agents, whose routing.md has a limit that is not a number
     const clock = mock.clock(on)
+    mock.env(on, { HOME: '/home/u' }) // the worktree guard checks the Bash call too
     const { logs } = world(on)
     agentRunsDb(on, 'Agent time limit: 2h\n')
     on('turn.step', async function* (_, e) {

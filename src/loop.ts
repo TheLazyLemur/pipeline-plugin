@@ -1,5 +1,6 @@
 import type { AgentInfo, AgentSpawnArgs, AgentSpawnResult } from 'claude-code'
-import { type Role, TAG, agentOf } from '../pipeline-agents/src/agents.ts'
+import { ROLES, type Role, TAG, agentOf } from '../pipeline-agents/src/agents.ts'
+import { worktreeOf } from '../pipeline-agents/src/guards.ts'
 import { reviewFrom } from '../pipeline-agents/src/routing.ts'
 import { DB, type Run, type Stage, type Ticket, lit, migrate, sql } from '../pipeline-agents/src/store.ts'
 import { closeMerged, sync } from './sync.ts'
@@ -15,6 +16,26 @@ export type Deps = {
   plugin: string
   /** `$.session.id()`: the owner this session's claims carry. */
   session: string
+  /** `$.session.root()`: the main checkout, which the agents never change. */
+  root: string
+  /** `$HOME`, under which the agents' worktrees live. */
+  home: string
+}
+
+/** The loop chooses each agent's worktree and states it in the spawn prompt; the guard in pipeline-agents holds it to that path. */
+const worktreeLine = (d: Pick<Deps, 'root' | 'home'>, ticketId: string, role: Role) => `Worktree: ${worktreeOf(d.home, d.root, ticketId, role)}`
+
+/** Removes every worktree left under the ticket's paths, one per role, then prunes; touches nothing else. Resolves what to log. */
+export const removeWorktrees = async (d: Pick<Deps, 'run' | 'root' | 'home'>, ticketId: string): Promise<string[]> => {
+  const log: string[] = []
+  for (const role of ['implementer', ...ROLES] as const) {
+    const path = worktreeOf(d.home, d.root, ticketId, role)
+    if ((await d.run(['test', '-e', path])).exitCode !== 0) continue
+    const r = await d.run(['git', 'worktree', 'remove', '--force', path])
+    log.push(r.exitCode === 0 ? `${ticketId} ${role} left a worktree; removed ${path}` : `${ticketId} ${role} left ${path}, which could not be removed: ${r.stderr.trim()}`)
+  }
+  await d.run(['git', 'worktree', 'prune'])
+  return log
 }
 
 const LIVE: readonly string[] = ['pending', 'running', 'waiting']
@@ -26,7 +47,7 @@ const STALE = `(owner_seen is null or owner_seen < datetime('now', '-15 minutes'
 const STARTS: Record<Exclude<Stage, 'implement'>, readonly Role[]> = { review: ['reviewer-spec', 'reviewer-quality'], verify: ['verifier'], fix: ['fixer'] }
 
 /** Spawns the agents of a stage the ticket has just entered: reviewers and verifier one tier up, the fixer on the routed model. Resolves what to log. */
-export const start = async (d: Pick<Deps, 'run' | 'spawn' | 'plugin'>, ticketId: string, stage: Exclude<Stage, 'implement'>): Promise<string> => {
+export const start = async (d: Pick<Deps, 'run' | 'spawn' | 'plugin' | 'root' | 'home'>, ticketId: string, stage: Exclude<Stage, 'implement'>): Promise<string> => {
   const [t] = (await sql(d.run, DB, `select ticket_id, title, url, model, pr_url from tickets where ticket_id = ${lit(ticketId)}`)) as Ticket[]
   if (t === undefined) throw new Error(`no ticket ${ticketId} to start ${stage} for`)
   const routed = t.model as (typeof MODELS)[number]
@@ -37,7 +58,7 @@ export const start = async (d: Pick<Deps, 'run' | 'spawn' | 'plugin'>, ticketId:
       description: `${TAG} ${ticketId} ${role}`,
       subagentType: `${d.plugin}:${role}`,
       model,
-      prompt: `Ticket ${ticketId}: ${t.title}\n${t.url ?? ''}\nPR: ${t.pr_url}`,
+      prompt: `Ticket ${ticketId}: ${t.title}\n${t.url ?? ''}\nPR: ${t.pr_url}\n${worktreeLine(d, ticketId, role)}`,
     })
     if (s.deny === undefined) continue
     const question = `The ${role} could not start: ${s.deny}. The PR is still a draft: finish its review, then set the ticket pr_open.`
@@ -72,12 +93,16 @@ export const pass = async (d: Deps): Promise<string[]> => {
   // 1. a merged PR marks its ticket done before sync, so dependents it was holding are released in this pass
   // 2. sync, so what it adds is triaged in this pass
   // a tracker that fails or times out (a laptop waking from sleep) must not hold up the tickets already in the table
+  let closed: string[] = []
   try {
-    for (const id of await closeMerged(d.run, DB, tracker)) log.push(`${id} is done: its PR merged`)
+    closed = await closeMerged(d.run, DB, tracker)
+    for (const id of closed) log.push(`${id} is done: its PR merged`)
     await sync(d.run, DB, tracker)
   } catch (err) {
     log.push(`tracker unreachable: ${(err as Error).message}`)
   }
+  // a done ticket's agents are gone: whatever worktree one left behind goes
+  for (const id of closed) log.push(...(await removeWorktrees(d, id)))
 
   // 3. triage; a failed ticket stays new and is retried next pass
   const fresh = (await sql(d.run, DB, `select ticket_id, title, url, body from tickets where status = 'new' order by rowid`)) as Ticket[]
@@ -149,7 +174,7 @@ export const pass = async (d: Deps): Promise<string[]> => {
   const s = await d.spawn({
     description: `${TAG} ${next.ticket_id}`,
     subagentType: `${d.plugin}:implementer-${next.model}`,
-    prompt: `Ticket ${next.ticket_id}: ${next.title}\n${next.url ?? ''}\n\n${
+    prompt: `Ticket ${next.ticket_id}: ${next.title}\n${next.url ?? ''}\n${worktreeLine(d, next.ticket_id, 'implementer')}\n\n${
       draft ? 'Open the PR as a draft on the host, with the title prefix "Draft: ": agents review it before the user does.' : 'Open the PR without a "Draft: " title prefix.'
     }`,
   })

@@ -1,5 +1,6 @@
 import type { ModelUsage, Register } from 'claude-code'
 import { LOOP_PLUGIN, agentOf } from '../src/agents.ts'
+import { GUARDED, worktreeRefusal } from '../src/guards.ts'
 import { REPORT_TOOL, dbRefusal, onReport, stop } from '../src/result.ts'
 import { type Verdict, decide, markTold, nudgeText, openRun, readRun, recordRequest, softStopText } from '../src/limits.ts'
 import { limitsFrom, readRouting } from '../src/routing.ts'
@@ -117,6 +118,24 @@ export const register: Register = on => {
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
     if (e.agentId === undefined) return next(e)
     const deny = dbRefusal((await $.agent.list()).find(a => a.id === e.agentId), LOOP_PLUGIN, e.tool, e as Record<string, unknown>)
+    return deny === undefined ? next(e) : { deny }
+  })
+
+  // the worktree guard: a pipeline agent's Edit, Write or NotebookEdit inside the main checkout, or its state-changing
+  // git command not placed in its own worktree, is refused naming that worktree. It fails closed: a check that throws
+  // refuses the call
+  on('tool.call', { tool: GUARDED }, async ($, e, next) => {
+    if (e.agentId === undefined) return next(e)
+    const agent = (await $.agent.list()).find(a => a.id === e.agentId)
+    if (agentOf(agent, LOOP_PLUGIN) === null) return next(e)
+    let deny: string | undefined
+    try {
+      const home = await $.env.get('HOME')
+      if (home === undefined) throw new Error('HOME is unset')
+      deny = worktreeRefusal(agent, LOOP_PLUGIN, await $.session.root(), home, e.tool, e as Record<string, unknown>)
+    } catch (err) {
+      deny = `The worktree guard could not check this call, so it is refused: ${(err as Error).message}`
+    }
     return deny === undefined ? next(e) : { deny }
   })
 

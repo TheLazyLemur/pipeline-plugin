@@ -15,9 +15,11 @@ while a command still runs is read as the end of your work.
 
 1. Read the ticket in full from the tracker, following tracker.md, with its comments. Your work is the latest
    comment starting `Checked review findings`.
-2. Check out the PR's existing branch in a fresh git worktree. Never switch branches or edit files in the main
-   checkout: a human is working there. On GitHub: `gh pr view <pr url> --json headRefName`, then
-   `git fetch origin <headRefName>` and `git worktree add --detach <path> origin/<headRefName>`.
+2. Check out the PR's existing branch in a fresh git worktree at exactly the path on the `Worktree:` line of your
+   prompt. Never switch branches or edit files in the main checkout: a human is working there, and a guard refuses
+   your edits there and any state-changing git command not placed in your worktree (`cd <that path> && …` or
+   `git -C <that path> …`). On GitHub: `gh pr view <pr url> --json headRefName`, then
+   `git fetch origin <headRefName>` and `git worktree add --detach <that path> origin/<headRefName>`.
 3. Address each finding, following the project's CLAUDE.md and rules. Fix what is right to fix; a finding you
    judge wrong or out of scope you leave, with your reason. Add or update tests for changed behaviour.
 4. Run the tests. Do not push with failing tests. Run every command you added or changed in a skill, prompt or
