@@ -188,14 +188,17 @@ test(
   },
 )
 
-/** A pipeline database holding only agent_runs; shortcut: one row in memory, since the kit runs no sqlite3. Every statement is kept. */
-const agentRunsDb = (on: On) => {
+/**
+ * A pipeline database holding only agent_runs, beside `routing` as routing.md (none when undefined); shortcut: one
+ * row in memory, since the kit runs no sqlite3. Every statement is kept.
+ */
+const agentRunsDb = (on: On, routing?: string) => {
   const statements: string[] = []
   let row: Record<string, unknown> | null = null
   const out = (exitCode: number, stdout: string) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
   on('process.run', async (_, e) => {
     if (e.argv[0] === 'test') return out(0, '') // .claude/pipeline exists: migrate at session start
-    if (e.argv[0] === 'cat') return out(1, '') // no routing.md: the default limits
+    if (e.argv[0] === 'cat') return routing === undefined ? out(1, '') : out(0, routing)
     const statement = e.argv.at(-1) ?? ''
     statements.push(statement)
     if (!statement.includes('agent_runs') || statement === SCHEMA) return out(0, '')
@@ -268,5 +271,67 @@ test(
     expect(db.statements[0]).toBe(SCHEMA)
     expect(db.row()).toMatchObject({ requests: 1, context_tokens: 501_000, soft_stop_at: 1, soft_limit: 'token' })
     expect(logs).toEqual(['T-1 implementer soft-stopped at its token limit', 'answer {"deny":"Limit reached (token): call report_result now with what you have."}'])
+  },
+)
+
+test(
+  'a bad limit line in routing.md is logged, and the tool call of an agent the pipeline plugin spawned runs',
+  {
+    plugins: [
+      {
+        name: 'pipeline',
+        register(on) {
+          on('session.start', async ($, e, next) => {
+            const started = await next(e)
+            $.clock.after(10_000, async () => {
+              await $.agent.spawn({ description: 'pipeline T-1', subagentType: 'pipeline:implementer-sonnet', prompt: 'implement' })
+            })
+            return started
+          })
+        },
+      },
+      {
+        name: 'agent',
+        register(on) {
+          // the implementer's loop: after its first model request, a Bash call, whose answer it logs
+          on('agent.spawn', async ($, e, next) => {
+            const spawned = await next(e)
+            $.clock.after(1_000, async () => {
+              // agentId is typed for an MCP tool's call alone; the engine carries it for any
+              const answer = await $.tool.call({ tool: 'Bash', command: 'ls', agentId: spawned.agentId } as Parameters<typeof $.tool.call>[0])
+              $.ui.log(`answer ${JSON.stringify(answer)}`)
+            })
+            return spawned
+          })
+        },
+      },
+    ],
+  },
+  async ($, on) => {
+    // given
+    // ... a session with the loop stand-in and pipeline-agents, whose routing.md has a limit that is not a number
+    const clock = mock.clock(on)
+    const { logs } = world(on)
+    agentRunsDb(on, 'Agent time limit: 2h\n')
+    on('turn.step', async function* (_, e) {
+      const usage = { model: 'claude-sonnet', input_tokens: 1_000, output_tokens: 50, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+      yield { kind: 'stop', stopReason: 'tool_use', usage }
+      return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'tool_use', usage }
+    })
+    await $.session.start(SESSION)
+
+    // when
+    // ... the loop's timer spawns the implementer, the engine sends its first model request, and it calls Bash
+    await clock.advance(10_000)
+    for await (const _ of $.turn.step({ turnId: 'turn-1', index: 0, model: 'sonnet', messageCount: 1, agentId: 'agent-1' }));
+    await clock.advance(1_000)
+
+    // then
+    // ... both hooks logged the bad line and let the request and the call through to what answers beneath them
+    expect(logs).toEqual([
+      'applying the agent limits to a model request failed: routing.md "Agent time limit:" must be a whole number from 1, not "2h"',
+      'applying the agent limits to a tool call failed: routing.md "Agent time limit:" must be a whole number from 1, not "2h"',
+      'answer {"deny":"no plugin answered"}',
+    ])
   },
 )

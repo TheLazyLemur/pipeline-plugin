@@ -74,12 +74,15 @@ export const recordRequest = (run: Run, db: string, agentId: string, usage: Mode
     `update agent_runs set requests = requests + 1, context_tokens = coalesce(${lit(usage === null ? null : usage.input_tokens + usage.cache_creation_input_tokens + usage.cache_read_input_tokens)}, context_tokens) ${where(agentId)}`,
   )
 
-/** Records that the run was told a nudge or soft stop, so a nudge is sent once per limit and the soft stop keeps the request count it came at. */
+/**
+ * Records that the run was told a nudge or soft stop, so a nudge is sent once per limit and the soft stop keeps the
+ * request count it came at. A nudge resolves one row only to the call that marked it first: parallel tool calls race.
+ */
 export const markTold = (run: Run, db: string, agentId: string, v: { kind: 'nudge' | 'soft'; limit: Limit }) =>
   sql(
     run,
     db,
     v.kind === 'nudge'
-      ? `update agent_runs set nudged_${v.limit} = 1 ${where(agentId)}`
+      ? `update agent_runs set nudged_${v.limit} = 1 ${where(agentId)} and nudged_${v.limit} = 0 returning agent_id`
       : `update agent_runs set soft_stop_at = coalesce(soft_stop_at, requests), soft_limit = coalesce(soft_limit, ${lit(v.limit)}) ${where(agentId)}`,
   )

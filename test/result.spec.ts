@@ -131,10 +131,15 @@ test('an implementer that reported may stop', async () => {
   assert.deepEqual(s, {})
 })
 
-/** Agent a1's run on T-1 as `role`, soft-stopped at its token limit and past the two requests of grace. */
-const hardStopped = async (db: string, role: 'implementer' | 'reviewer-quality') => {
+/** Agent a1's run on T-1 as `role`, soft-stopped at its token limit and still inside the two requests of grace. */
+const softStopped = async (db: string, role: 'implementer' | 'reviewer-quality') => {
   await openRun(run, db, 'a1', { ticket: 'T-1', role }, 0)
   await markTold(run, db, 'a1', { kind: 'soft', limit: 'token' })
+}
+
+/** Agent a1's run on T-1 as `role`, soft-stopped at its token limit and past the two requests of grace. */
+const hardStopped = async (db: string, role: 'implementer' | 'reviewer-quality') => {
+  await softStopped(db, role)
   await sql(run, db, `update agent_runs set requests = soft_stop_at + 2`)
 }
 
@@ -156,11 +161,11 @@ test('an implementer hard-stopped at a limit is not blocked: its ticket goes to 
   assert.match(String(r?.question), /reached its token limit \(Agent token limit in routing\.md\)/)
 })
 
-test('a reviewer hard-stopped at a limit sends its ticket to needs_human too', async () => {
+test('a reviewer soft-stopped at a limit sends its ticket to needs_human when it stops, even inside its grace', async () => {
   // given
-  // ... a ticket at stage review whose quality reviewer was hard-stopped at its token limit
+  // ... a ticket at stage review whose quality reviewer was soft-stopped at its token limit and has not been hard-stopped
   const db = await withTicket('in_progress', `stage = 'review', difficulty = 4, pr_url = 'https://github.com/o/r/pull/7'`)
-  await hardStopped(db, 'reviewer-quality')
+  await softStopped(db, 'reviewer-quality')
   const reviewer = { ...implementer, description: 'pipeline T-1 reviewer-quality' } as AgentInfo
 
   // when

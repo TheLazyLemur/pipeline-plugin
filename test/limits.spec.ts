@@ -124,16 +124,18 @@ test('a run\'s row is created at its first request, kept across a reload, update
   const reopened = await openRun(run, db, 'a1', { ticket: 'T-1', role: 'implementer' }, 9000)
 
   // when
-  // ... two requests are recorded, the second with no usage, and the run is nudged and soft-stopped at its token limit
+  // ... two requests are recorded, the second with no usage, and the run is nudged twice and soft-stopped at its token limit
   await recordRequest(run, db, 'a1', usage(10, 200, 590))
   await recordRequest(run, db, 'a1', null)
-  await markTold(run, db, 'a1', { kind: 'nudge', limit: 'token' })
+  const nudges = [await markTold(run, db, 'a1', { kind: 'nudge', limit: 'token' }), await markTold(run, db, 'a1', { kind: 'nudge', limit: 'token' })]
   await markTold(run, db, 'a1', { kind: 'soft', limit: 'token' })
   await markTold(run, db, 'a1', { kind: 'soft', limit: 'time' })
 
   // then
-  // ... the reload kept the first start, the context is the last usage's input side, and the first soft stop stands
+  // ... the reload kept the first start, only the first nudge mark claimed it, the context is the last usage's input
+  // ... side, and the first soft stop stands
   assert.equal(reopened.started_at, 1000)
+  assert.deepEqual(nudges.map(n => n.length), [1, 0])
   assert.deepEqual(await readRun(run, db, 'a1'), {
     agent_id: 'a1',
     ticket_id: 'T-1',

@@ -119,15 +119,16 @@ export type Stop = { block?: string; log?: string }
 const WORKS_AT: Record<Role, Stage> = { implementer: 'implement', 'reviewer-spec': 'review', 'reviewer-quality': 'review', verifier: 'verify', fixer: 'fix' }
 
 /**
- * Handles a pipeline agent stopping: one hard-stopped at a limit sends its ticket, if still at its stage, to
- * needs_human naming the limit; an agent that must report is blocked once while its ticket is still at its stage,
+ * Handles a pipeline agent stopping: one hard-stopped at a limit, or a reviewer soft-stopped at one, sends its
+ * ticket, if still at its stage, to needs_human naming the limit; an agent that must report is blocked once while its ticket is still at its stage,
  * then the ticket goes to needs_human.
  */
 export const stop = async (run: Run, db: string, plugin: string, agent: AgentInfo | undefined, isContinued: boolean): Promise<Stop> => {
   const who = agentOf(agent, plugin)
   if (who === null || agent === undefined) return {}
   const limited = await readRun(run, db, agent.id)
-  if (limited !== undefined && isHardStopped(limited)) {
+  // a soft-stopped reviewer cannot post its comment, so it ends without its review even inside the grace
+  if (limited !== undefined && (isHardStopped(limited) || (REPORTS_AT[who.role] === undefined && limited.soft_stop_at !== null))) {
     const question = `The ${who.role} reached its ${limited.soft_limit} limit (Agent ${limited.soft_limit} limit in routing.md) and was stopped without reporting. Check its branch and PR, then send the ticket back to new or set it pr_open.`
     const moved = await settle(run, db, who.ticket, WORKS_AT[who.role], `status = 'needs_human', restarts = 0, question = ${lit(question)}`)
     return moved ? { log: `${who.ticket} needs you: its ${who.role} was stopped at its ${limited.soft_limit} limit` } : {}

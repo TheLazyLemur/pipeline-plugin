@@ -143,10 +143,12 @@ but `report_result` is refused with "Limit reached (<which>): call report_result
 requests after the soft stop, a run that has not reported is hard-stopped: the `turn.step` hook answers its
 requests without sending them, so it ends. A report made before then is recorded as normal. On a hard-stopped
 agent's stop the `SubagentStop` hook does not block it; its ticket, if still at the agent's stage, goes to
-needs_human with a question naming the limit (reviewers included). A restarted agent is a new agent with a new row,
+needs_human with a question naming the limit. A soft-stopped reviewer, which cannot post its comment, is treated the
+same when it stops, even inside the two requests. A restarted agent is a new agent with a new row,
 so fresh limits; the rows live in `pipeline.db`, so a reload or restart keeps them. Each nudge, soft stop and hard
 stop logs one line naming the ticket, role and limit. A limit takes effect at the agent's next tool call or model
-request, never inside a running tool call; the main session and agents the loop did not spawn are not limited.
+request, never inside a running tool call; the main session and agents the loop did not spawn are not limited. The limits fail open: an
+error in either hook (a sqlite failure, a bad limit line in routing.md) is logged and the request or call goes ahead.
 
 ### Permissions and notices
 The loop's agents run unattended. A `tool.check` hook allows every tool call of the loop's agents (described

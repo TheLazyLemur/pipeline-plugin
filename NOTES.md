@@ -37,6 +37,8 @@ Things SPEC.md does not settle. Everything else the build decided is described i
     long does too. The owner is the session id read once at session start.
 12. **Agent limits soft-stop reviewers with the same text as everyone else**: "call report_result now", though a
     reviewer does not report and its `report_result` call is refused. Every other call is refused too, so a reviewer
-    at its limit cannot post its comment; two requests later it is hard-stopped and the ticket goes to needs_human.
-    Tell reviewers to post what they have instead? One pair of limits serves every model and role until ticket 22's
+    at its limit cannot post its comment. When it stops, even inside its two requests of grace, its ticket goes to
+    needs_human as if hard-stopped, so a missing review is never passed to the verifier. Tell reviewers to post what
+    they have instead? The limits fail open: an error in either hook (a sqlite failure, a typo such as
+    `Agent time limit: 2h` in routing.md) is logged in the pipeline log and the request or call runs unlimited. One pair of limits serves every model and role until ticket 22's
     usage shows how to tune them. A request with no `usage` leaves the context of the last one that had it.
