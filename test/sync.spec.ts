@@ -2,34 +2,21 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { sql } from '../pipeline-agents/src/store.ts'
 import { sync } from '../src/sync.ts'
-import { freshDb, run } from './helpers.ts'
+import { fakeTracker, freshDb, run } from './helpers.ts'
 
-/** A tracker.md whose three sync commands print the given JSON. */
-const tracker = (waiting: unknown[], done: unknown[], blockers: unknown[]) => `# Tracker
-## List the tickets waiting to be worked
-\`\`\`sh
-echo '${JSON.stringify(waiting)}'
-\`\`\`
-## List the tickets that are done
-\`\`\`sh
-echo '${JSON.stringify(done)}'
-\`\`\`
-## List the blockers
-\`\`\`sh
-echo '${JSON.stringify(blockers)}'
-\`\`\`
-`
+/** A tracker tool whose three sync ops return the given results. */
+const tracker = (waiting: unknown, done: unknown, blockers: unknown) => fakeTracker({ waiting: () => waiting, done: () => done, blockers: () => blockers })
 
 test('waiting tickets are added as new and existing rows keep their status', async () => {
   // given
   // ... one ticket already ready under an old title, and the tracker listing it and a new one
   const db = await freshDb()
   await sql(run, db, `insert into tickets (ticket_id, title, status, model) values ('1', 'old', 'ready', 'opus')`)
-  const md = tracker([{ id: 1, title: 'renamed', url: null, body: null }, { id: 2, title: 'two', url: 'https://t/2', body: 'the body' }], [], [])
+  const t = tracker([{ id: 1, title: 'renamed', url: null, body: null }, { id: 2, title: 'two', url: 'https://t/2', body: 'the body' }], [], [])
 
   // when
   // ... sync runs
-  await sync(run, db, md)
+  await sync(t, run, db)
 
   // then
   // ... the existing row has the new title and the same status, the new one is new
@@ -43,7 +30,7 @@ test('a waiting ticket with an unfinished blocker is not pulled in', async () =>
   // given
   // ... two waiting tickets, one blocked by an open ticket and one by a done ticket
   const db = await freshDb()
-  const md = tracker(
+  const t = tracker(
     [{ id: 1, title: 'one', url: null, body: null }, { id: 2, title: 'two', url: null, body: null }],
     [],
     [{ id: 1, blocked_by: 9, blocker_done: false }, { id: 2, blocked_by: 8, blocker_done: true }],
@@ -51,7 +38,7 @@ test('a waiting ticket with an unfinished blocker is not pulled in', async () =>
 
   // when
   // ... sync runs
-  await sync(run, db, md)
+  await sync(t, run, db)
 
   // then
   // ... only the ticket whose blocker is done is in the table
@@ -64,11 +51,11 @@ test('a ticket that became blocked is removed while new or ready, and kept once 
   const db = await freshDb()
   await sql(run, db, `insert into tickets (ticket_id, title, status) values ('1', 'one', 'new'), ('2', 'two', 'ready'), ('3', 'three', 'in_progress')`)
   const waiting = [1, 2, 3].map(id => ({ id, title: `t${id}`, url: null, body: null }))
-  const md = tracker(waiting, [], [1, 2, 3].map(id => ({ id, blocked_by: 9, blocker_done: 0 })))
+  const t = tracker(waiting, [], [1, 2, 3].map(id => ({ id, blocked_by: 9, blocker_done: 0 })))
 
   // when
   // ... sync runs
-  await sync(run, db, md)
+  await sync(t, run, db)
 
   // then
   // ... only the in-progress ticket is left
@@ -80,11 +67,11 @@ test('tickets done in the tracker are marked done', async () => {
   // ... a ticket with its PR open that the tracker now has as done
   const db = await freshDb()
   await sql(run, db, `insert into tickets (ticket_id, title, status) values ('1', 'one', 'pr_open'), ('2', 'two', 'pr_open')`)
-  const md = tracker([], [{ id: 1 }], [])
+  const t = tracker([], [{ id: 1 }], [])
 
   // when
   // ... sync runs
-  await sync(run, db, md)
+  await sync(t, run, db)
 
   // then
   // ... it is done and the other is untouched
@@ -94,17 +81,17 @@ test('tickets done in the tracker are marked done', async () => {
   ])
 })
 
-test('a tracker.md without the blockers command is refused', async () => {
+test('a blockers result that is not a list of rows is refused', async () => {
   // given
-  // ... a tracker.md written before the blockers command was required
+  // ... a tracker whose blockers op returns one object instead of an array
   const db = await freshDb()
-  const md = tracker([], [], []).split('## List the blockers')[0] ?? ''
+  const t = tracker([], [], { id: 1, blocked_by: 2, blocker_done: false })
 
   // when
   // ... sync runs
-  const synced = sync(run, db, md)
+  const synced = sync(t, run, db)
 
   // then
-  // ... it fails naming the missing section
-  await assert.rejects(synced, /no command under "## List the blockers"/)
+  // ... it fails naming the op
+  await assert.rejects(synced, /tracker blockers did not return an array of objects/)
 })

@@ -3,7 +3,7 @@ import { ROLES, type Role, TAG, agentOf } from '../pipeline-agents/src/agents.ts
 import { worktreeOf } from '../pipeline-agents/src/guards.ts'
 import { reviewFrom } from '../pipeline-agents/src/routing.ts'
 import { DB, type Run, type Stage, type Ticket, lit, migrate, sql } from '../pipeline-agents/src/store.ts'
-import { closeMerged, sync } from './sync.ts'
+import { type Tracker, closeMerged, sync } from './sync.ts'
 import { type Complete, MODELS, UP, triage } from './triage.ts'
 
 export type Deps = {
@@ -20,6 +20,8 @@ export type Deps = {
   root: string
   /** `$HOME`, under which the agents' worktrees live. */
   home: string
+  /** The project's tracker tool (`TRACKER_TOOL`), or null when the project has none. */
+  tracker: Tracker | null
 }
 
 /** The loop chooses each agent's worktree and states it in the spawn prompt; the guard in pipeline-agents holds it to that path. */
@@ -74,15 +76,10 @@ const read = async (run: Run, name: string) => {
   return r.exitCode === 0 ? r.stdout : null
 }
 
-/** One pass: mark merged PRs done and sync (a tracker failure is logged and the pass goes on), triage every new ticket, move each in_progress ticket this session owns on, send those of a stopped session to a human, claim and spawn the implementer for the next ready one if none is in progress. Resolves what to log. */
+/** One pass: mark merged PRs done and sync (a missing tracker tool or a tracker failure is logged and the pass goes on), triage every new ticket, move each in_progress ticket this session owns on, send those of a stopped session to a human, claim and spawn the implementer for the next ready one if none is in progress. Resolves what to log. */
 export const pass = async (d: Deps): Promise<string[]> => {
-  const [tracker, readiness, rubric, routing] = await Promise.all([
-    read(d.run, 'tracker'),
-    read(d.run, 'readiness'),
-    read(d.run, 'rubric'),
-    read(d.run, 'routing'),
-  ])
-  if (tracker === null || readiness === null || rubric === null || routing === null) return [`no .claude/pipeline setup here; run /tracker-setup`]
+  const [readiness, rubric, routing] = await Promise.all([read(d.run, 'readiness'), read(d.run, 'rubric'), read(d.run, 'routing')])
+  if (readiness === null || rubric === null || routing === null) return [`no .claude/pipeline setup here; run /tracker-setup`]
   await migrate(d.run, DB)
   // heartbeat first, so a pass that fails later still shows this session alive; a ticket from before owners is
   // adopted, so the stage rules below apply to it as they did then
@@ -94,12 +91,15 @@ export const pass = async (d: Deps): Promise<string[]> => {
   // 2. sync, so what it adds is triaged in this pass
   // a tracker that fails or times out (a laptop waking from sleep) must not hold up the tickets already in the table
   const done: string[] = []
-  try {
-    const closed = await closeMerged(d.run, DB, tracker)
-    for (const id of closed) log.push(`${id} is done: its PR merged`)
-    done.push(...closed, ...(await sync(d.run, DB, tracker)))
-  } catch (err) {
-    log.push(`tracker unreachable: ${(err as Error).message}`)
+  if (d.tracker === null) log.push('no pipeline tracker tool here; run /tracker-setup')
+  else {
+    try {
+      const closed = await closeMerged(d.tracker, d.run, DB)
+      for (const id of closed) log.push(`${id} is done: its PR merged`)
+      done.push(...closed, ...(await sync(d.tracker, d.run, DB)))
+    } catch (err) {
+      log.push(`tracker unreachable: ${(err as Error).message}`)
+    }
   }
   // a done ticket's agents are gone, however it got there: whatever worktree one left behind goes
   for (const id of done) log.push(...(await removeWorktrees(d, id)))
@@ -175,7 +175,7 @@ export const pass = async (d: Deps): Promise<string[]> => {
     description: `${TAG} ${next.ticket_id}`,
     subagentType: `${d.plugin}:implementer-${next.model}`,
     prompt: `Ticket ${next.ticket_id}: ${next.title}\n${next.url ?? ''}\n${worktreeLine(d, next.ticket_id, 'implementer')}\n\n${
-      draft ? 'Open the PR as a draft on the host, with the title prefix "Draft: ": agents review it before the user does.' : 'Open the PR without a "Draft: " title prefix.'
+      draft ? 'Open the PR as a draft, `pr_create` with `draft: true`: agents review it before the user does.' : 'Open the PR as a normal one, `pr_create` with `draft: false`.'
     }`,
   })
   if (s.deny !== undefined) {

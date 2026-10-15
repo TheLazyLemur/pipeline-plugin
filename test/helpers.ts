@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type { ProcessRunResult } from 'claude-code'
 import { DB, type Run, SCHEMA, sql } from '../pipeline-agents/src/store.ts'
-import { BLOCKERS, DONE, MARK_DONE, MERGED, WAITING } from '../src/sync.ts'
+import type { Tracker } from '../src/sync.ts'
 
 /** `$.process.run` over child_process. */
 export const run: Run = async ([cmd, ...args], init) => {
@@ -29,14 +29,21 @@ export const freshDb = async () => {
   return db
 }
 
-/** A project set up as /tracker-setup leaves it, with the schema applied; `run` already has it as cwd, `root` is its path. */
+/** A tracker tool over `ops`, each op answering from its arguments; an op not given rejects, as the mod's unknown op does. */
+export const fakeTracker = (ops: Record<string, (args: Record<string, unknown>) => unknown>): Tracker => async (op, args = {}) => {
+  const answer = ops[op]
+  if (answer === undefined) throw new Error(`no op ${op}`)
+  return answer(args)
+}
+
+/** A tracker with nothing in it: no ticket waiting, done or blocked, and no PR merged. */
+export const emptyTracker = () => fakeTracker({ waiting: () => [], done: () => [], blockers: () => [], pr_merged: () => ({ merged: false }), mark_done: () => 'ok' })
+
+/** A project set up as /tracker-setup leaves it (its tracker tool is the Deps' own), with the schema applied; `run` already has it as cwd, `root` is its path. */
 export const freshProject = async () => {
   const root = mkdtempSync(join(tmpdir(), 'pipeline-project-'))
   mkdirSync(join(root, '.claude/pipeline'), { recursive: true })
   for (const name of ['readiness', 'rubric', 'routing']) writeFileSync(join(root, `.claude/pipeline/${name}.md`), `# ${name}\n`)
-  // a tracker with nothing in it: each sync command prints no rows and no PR has merged
-  const empty = [WAITING, DONE, BLOCKERS, MARK_DONE].map(h => `## ${h}\n\`\`\`sh\ntrue\n\`\`\`\n`).join('')
-  writeFileSync(join(root, '.claude/pipeline/tracker.md'), `# tracker\n${empty}## ${MERGED}\n\`\`\`sh\necho '{"merged": false}'\n\`\`\`\n`)
   const inRoot: Run = (argv, init) => run(argv, { cwd: root, ...init })
   await sql(inRoot, DB, SCHEMA)
   return { run: inRoot, db: DB, root }

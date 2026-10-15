@@ -1,70 +1,103 @@
 ---
 name: tracker-setup
-description: Connect the pipeline to this project's ticket tracker. Finds the tracker tooling, reads the board's statuses and writes .claude/pipeline/tracker.md. Use when setting up the pipeline in a project or switching tracker.
+description: Connect the pipeline to this project's ticket tracker and PR host. Finds the MCP servers or CLIs that reach them, agrees the status mapping and writes the project mod .claude/skills/pipeline-tracker/, whose one tracker tool the loop, agents and skills use. Use when setting up the pipeline in a project, switching tracker or PR host, or porting a tracker.md or tracker.sh.
 ---
 
 # Tracker setup
 
-A conversation with the user. The result is `.claude/pipeline/tracker.md`: the commands the pipeline's mod runs to
-sync, and the instructions its agents follow to talk to the tracker. No adapter code in the plugin.
+A conversation with the user. The result is a small project mod, `pipeline-tracker`, in
+`.claude/skills/pipeline-tracker/`, where Claude Code loads it automatically and reloads it on change. It registers
+one tool, `tracker` (`mcp__pipeline-tracker__tracker`), covering both the tracker and the PR host. The loop, every
+pipeline agent, `/learn` and `/pipeline-status` reach the tracker and the PR host through it alone. The mod is the
+project's code: the pipeline plugin ships no adapter.
 
-1. **Find the tracker.** Ask which tracker and board or project this repo uses if it is not obvious. Look for what
-   can reach it: a connected MCP server, `gh` (run `gh auth status`), `acli` or a Jira API token in an env var, or
-   anything else the user names. Try a read-only call to prove it works.
-2. **Read the board's statuses** and agree with the user on the mapping:
-   - which tracker statuses mean a ticket is waiting to be worked (sync pulls these in as `new`),
-   - which status to move a ticket to when the implementer starts, when its PR is open, and which mean done.
-3. **Write `.claude/pipeline/tracker.md`.** The pipeline's mod runs five commands itself. Each goes in the
-   first fenced code block under its own heading, spelled exactly as below, and is run with `sh -c` from the
-   project root. A tracker.md missing any of them stops every loop pass from syncing, logging "tracker unreachable"
-   with "run /tracker-setup".
+## The contract
 
-   **Pick the shape.** When the tracker or the PR host is reached through an API (Jira, GitHub, Bitbucket, Linear),
-   write one script, `.claude/pipeline/tracker.sh`, with one subcommand per section below: `waiting`, `done`,
-   `blockers`, `merged`, `mark-done`, plus `read`, `move`, `comment` and `link-pr` for the agents. Each section
-   of tracker.md is then one line calling the script, for example `.claude/pipeline/tracker.sh merged "$1"`.
-   Auth, pagination, JSON shaping and transitions live in tested code, and the agents call one known command
-   instead of composing API requests. If the project already has helpers for that tracker (a Jira client, a
-   `gh` wrapper, an API library), call them from the script instead of writing new requests. For a local
-   tracker such as a SQLite file, inline commands in tracker.md are fine and no script is needed.
+One tool, `tracker`, input `{op, ...args}`. Every op is bounded at 30 seconds inside the mod. A failing op answers
+`{deny: "<reason>"}`, naming the reason (not connected, auth expired, timed out after 30 s, the host's error); no
+retries inside the mod: the loop logs "tracker unreachable: <reason>" and its next pass tries again. A success
+answers `{result}`, the value below as a JSON value (never JSON text), `ok` as the string `"ok"`.
 
-   A script needs contract tests, in the project's own test setup, that run each subcommand and check the output
-   shape the mod relies on, without a live loop: the JSON fields of `waiting`, `done` and `blockers`,
-   `{"merged": true|false}` from `merged`, and `mark-done` succeeding on an already-done ticket and failing on
-   a bad id. Stub or record the API responses; the tests must not need to change a real ticket. They must pass
-   before tracker.md is saved.
+| `op` | Input | Returns |
+|---|---|---|
+| `waiting` | none | `[{id, title, url, body}]` |
+| `done` | none | `[{id}]` |
+| `blockers` | none | `[{id, blocked_by, blocker_done}]` |
+| `mark_done` | `id` | ok |
+| `read` | `id` | `{id, title, url, body, comments: [{author, at, text}]}` |
+| `move` | `id`, `status` (`in_progress` / `in_review` / `done`) | ok |
+| `comment` | `id`, `text` | ok |
+| `link_pr` | `id`, `url` | ok |
+| `pr_create` | `branch`, `title`, `body`, `draft` | `{url}` |
+| `pr_view` | `url` | `{title, branch, head, draft, merged}` |
+| `pr_merged` | `url` | `{merged: true\|false}` |
+| `pr_diff` | `url` | the diff, as text |
+| `pr_comment` | `url`, `text` | ok |
+| `pr_comments` | `url` | `[{author, at, text, path?, line?}]`, general and inline together |
+| `pr_edit` | `url`, `title?`, `body?` | ok |
+| `pr_ready` | `url` | ok |
 
-   The three sync commands each print one JSON array (or nothing, meaning none), with exactly these fields:
-   - `## List the tickets waiting to be worked` prints `[{"id", "title", "url", "body"}]`, `url` null when there is
-     none, `body` the description followed by the acceptance criteria (triage judges the ticket from it). Only work items one PR can finish: filter out epics and other parent or container types in the
-     command itself.
-   - `## List the tickets that are done` prints `[{"id"}]`, every ticket in a done status.
-   - `## List the blockers` prints `[{"id", "blocked_by", "blocker_done"}]`, one row per link from a waiting
-     ticket to a ticket it is blocked by or depends on, `blocker_done` true when that ticket is in a done
-     status. When the tracker has no such links, the command prints `[]`.
+- `id` and `blocked_by` are the tracker's ids, as strings or integers; an `id` given to an op is a string. `url`
+  is null when a ticket has none.
+- `waiting`: only work items one PR can finish, epics and other parent or container types left out. `body` is the
+  description followed by the acceptance criteria (triage judges the ticket from it), null when there is none.
+- `done`: every ticket in a done status.
+- `blockers`: one row per link from a waiting ticket to a ticket it is blocked by or depends on, `blocker_done`
+  true when that ticket is in a done status (true or false; 1 or 0 is accepted). `[]` when the tracker has no links.
+- `mark_done`: moves the ticket to the done status, and succeeds when it is already done (some trackers close on
+  merge).
+- `move`: takes the pipeline's statuses and maps them to the board's, as the README records.
+- `pr_create`: the branch is already pushed; the mod runs no git. With `draft: true` it opens a host draft titled
+  `Draft: <title>`; on a host without drafts, the prefix alone marks it. `pr_ready` marks the PR ready on the host
+  and strips the `Draft: ` prefix, in one call. `head` in `pr_view` is the head commit's sha; `draft` is true while
+  either the host draft or the prefix stands.
 
-   `id` and `blocked_by` are the tracker's ids, as strings or integers.
+## Steps
 
-   Each loop pass, before syncing, the mod runs two more for every ticket whose PR is open, so a merged blocker
-   releases its dependents in the same pass. Each gets one value as `$1`, passed as an argument and never
-   spliced into the command: always quote it as `"$1"`, and never paste it into a query string unchecked.
-   - `## Check whether a PR is merged` gets the PR URL as `$1` and prints `{"merged": true}` or
-     `{"merged": false}`; anything else stops the pass from syncing. On GitHub:
-     `gh pr view "$1" --json state --jq '{merged: (.state == "MERGED")}'`. Use the PR host's CLI or API.
-   - `## Mark a ticket done` gets the tracker ticket id as `$1` and moves it to the done status, exiting
-     non-zero on failure. It must succeed when the ticket is already done (some trackers close on merge).
+1. **Find what reaches the tracker and the PR host**, often two systems (Jira and Bitbucket, Linear and GitHub). Ask
+   which tracker and board, and which PR host, if it is not obvious. Look for a connected MCP server (`/mcp`), a CLI
+   (`gh auth status`, `acli`), an HTTP API with a token in an env var, or anything the user names. Prove each with a
+   read-only call. Prefer what the project already uses.
+2. **Read the board's statuses** and agree the mapping with the user: which statuses mean waiting to be worked
+   (`waiting`), which status `move` uses for `in_progress`, `in_review` and `done`, and which statuses mean done
+   (`done`, `blocker_done`).
+3. **Port an existing setup.** If `.claude/pipeline/tracker.md` or `.claude/pipeline/tracker.sh` exists, translate
+   its commands into the mod's ops: they are commands the user already proved. A script the mod still runs moves into
+   the mod's folder. Delete both files once step 5 passes; nothing reads them any more.
+4. **Write the mod** in `.claude/skills/pipeline-tracker/`:
+   - `.claude-plugin/plugin.json`:
+     `{ "name": "pipeline-tracker", "version": "0.1.0", "description": "The pipeline's tracker tool for <tracker> and <PR host>" }`
+   - `hooks/hooks.json`: `{ "modules": ["./register.ts"] }`
+   - `hooks/register.ts`: registers the tool in `session.start`, awaited before `next`, with `isDeferred: false` so it
+     is never behind tool search, and an input schema naming `op` (the sixteen values) and the arguments above.
+     One `tool.call` hook on `{ tool: 'mcp__pipeline-tracker__tracker' }` answers it: one function per op, built on
+     `$.mcp.call(server, tool, args)` for an MCP server, `$.http.fetch` for an API, `$.process.run(argv)` for a CLI
+     (the argv as a list, so no value is ever read as shell text). Race each op against
+     `$.clock.sleep(30_000)` and answer `{deny}` on the timeout, on a thrown error, on an MCP result with `isError`,
+     on a non-2xx response or a non-zero exit, and on an unknown op. Shape every answer to the contract.
+   - `README.md`: the status mapping, and for each op what it calls (server and tool, endpoint, or command), so the
+     user can read and adjust what it does.
+   - `test/*.test.ts`: the contract tests, one per op, writes included. Each answers the mod's `mcp.call`,
+     `http.fetch` and `process.run` requests from saved responses (`on('mcp.call', …)` and the like, beneath the
+     mod), checks the server, tool and arguments (or URL and body, or argv) the op sent, and the shape it returned.
+     Add a test that an op failing beneath answers `{deny}` naming the reason, and one that an unknown op is denied.
+     Nothing in them may reach a real ticket or PR.
 
-   Run each command and check its output before saving: the merge check on one merged and one open PR, and
-   mark-done only with the user's go-ahead, on a ticket they name. Then add exact, copy-pasteable commands or tool calls, which the agents follow, for:
-   - reading one ticket in full (description, acceptance criteria, comments),
-   - moving a ticket's status,
-   - adding a comment to a ticket,
-   - linking a PR to a ticket,
-   - and the status mapping from step 2.
+   Credentials never go in the mod: it relies on the MCP server's or CLI's own login, or reads a token from an env
+   var it names (`$.env.get`).
+5. **Check it.** Run each read op live once, through the tool once the mod has loaded (when the tool is not listed
+   yet, ask the user to restart the session and carry on from this step): `waiting`, `done`, `blockers`, `read` on a ticket the
+   user names, `pr_view` and `pr_merged` on one merged and one open PR. Never run a write op against a real ticket or
+   PR while checking: writes are first exercised live on the first real ticket. Keep the live responses as the
+   contract tests' saved responses. Then run `claude plugin validate .claude/skills/pipeline-tracker` and
+   `claude plugin test .claude/skills/pipeline-tracker`. Nothing is saved until both the live check and the tests
+   pass: fix the mod and check again.
+6. **Ask the user** whether to commit the mod (the team loads it too), add `.claude/skills/pipeline-tracker/` to
+   the project's `.gitignore`, or keep it to this clone through `.git/info/exclude`. Do what they choose.
+7. **Copy the defaults** `readiness.md`, `rubric.md` and `routing.md` from this skill's `defaults/` folder into
+   `.claude/pipeline/`, skipping any that already exist. Show them to the user and offer to adjust them. Add
+   `.claude/pipeline/pipeline.db` to the project's `.gitignore`.
 
-   Credentials never go in tracker.md or the script: name the env var or the tool's own login instead.
-4. **Copy the defaults** `readiness.md`, `rubric.md` and `routing.md` from this skill's `defaults/` folder into
-   `.claude/pipeline/`, skipping any that already exist. Show them to the user and offer to adjust them.
-5. Add `.claude/pipeline/pipeline.db` to the project's `.gitignore`.
-
-A new tracker means running this skill again; it overwrites tracker.md only.
+Without the mod, each loop pass logs "no pipeline tracker tool here; run /tracker-setup" and skips the merge check,
+sync and mark-done; triage and the agents' stages still run. A new tracker or PR host means running this skill
+again; it rewrites the mod only.

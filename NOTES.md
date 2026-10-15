@@ -23,7 +23,7 @@ Things SPEC.md does not settle. Everything else the build decided is described i
 8. **A routing.md without `Review threshold:` reviews from 3**, so no re-setup is needed after a pull. A malformed
    value fails the pass instead. There is no "off": a threshold above 5 never reviews.
 9. **Reviewers are read-only by prompt plus `disallowedTools: Write, Edit, NotebookEdit`**; they still have Bash,
-   which they need for `gh` and the tracker commands.
+   which they need for git.
 10. **The pipeline.db guard is a text match on Bash commands.** Any Bash command of a pipeline agent that contains
     `pipeline.db` is refused, reads included, and so is a commit message or PR body that names it. Read, Grep and
     other tools are not checked, and a command that builds the path (`pipeline.d"b"`) gets through. It stops the

@@ -28,12 +28,14 @@ Then, in your project:
 
 | command | what it does |
 |---|---|
-| `/pipeline:tracker-setup` | Connects the pipeline to your tracker and writes `.claude/pipeline/tracker.md`. Run once per project, and again to switch tracker. |
+| `/pipeline:tracker-setup` | Connects the pipeline to your tracker and PR host: writes the project mod `.claude/skills/pipeline-tracker/`, whose one `tracker` tool the loop, the agents and the skills use, with its README and contract tests. Run once per project, and again to switch tracker or to port a `tracker.md`. |
 | `/pipeline:pipeline-status` | Shows where every ticket stands and lets you answer the ones in `needs_human`. |
 | `/pipeline:learn` | Works through the review of the pipeline's PRs with you (human comments, and the verifier's findings with the fixer's outcome) and changes the file that would have prevented each problem. |
 
 Once `/pipeline:tracker-setup` has run, the loop starts with the session: the first pass runs 10 seconds after start,
-then one pass every 5 minutes. Pipeline state lives in `.claude/pipeline/pipeline.db`.
+then one pass every 5 minutes. Pipeline state lives in `.claude/pipeline/pipeline.db`. The tracker and the PR host
+are reached only through the `tracker` tool (`mcp__pipeline-tracker__tracker`), so an MCP-only Jira, Linear or
+GitHub works like one with a CLI; the ops are listed in `SPEC.md` under "The tracker tool".
 
 ## One loop pass
 
@@ -41,7 +43,10 @@ then one pass every 5 minutes. Pipeline state lives in `.claude/pipeline/pipelin
 flowchart TD
     start([Timer fires]) --> setup{"Is .claude/pipeline set up?"}
     setup -- no --> stop(["Log: run /tracker-setup"])
-    setup -- yes --> merged[Each pr_open ticket whose PR merged: mark done in the tracker and the table]
+    setup -- yes --> tool{Is there a tracker tool?}
+    tool -- no --> notool[Log: no pipeline tracker tool here; run /tracker-setup]
+    notool --> triage
+    tool -- yes --> merged[Each pr_open ticket whose PR merged: mark done in the tracker and the table]
     merged --> sync[Sync: pull new and changed tickets from the tracker]
     sync --> held{Blocker not done?}
     held -- yes --> hold([Ticket held out of the table until its blocker is done])
@@ -91,8 +96,10 @@ tsconfig files read a committed snapshot in `types/vendor/` instead. After a Cla
 `npm run types:vendor` in a checkout the engine has loaded. The snapshot leaves out `claude-code-mcp`: it lists the
 MCP servers of the session that wrote it, not the engine.
 
-The plugin test (`pipeline-agents/test/report-result.test.ts`) loads `pipeline-agents` with a stand-in for the loop
-named `pipeline`, and checks that an agent `pipeline` spawned from its timer gets its `report_result` call answered,
-and would not if `pipeline` owned the tool. The root plugin has no plugin tests: `claude plugin test pipeline-agents`
+The plugin tests load `pipeline-agents` with a stand-in for the loop named `pipeline`.
+`pipeline-agents/test/report-result.test.ts` checks that an agent `pipeline` spawned from its timer gets its
+`report_result` call answered, and would not if `pipeline` owned the tool. `pipeline-agents/test/tracker-tool.test.ts`
+checks that a stand-in `pipeline-tracker` mod answers both the loop's own `tracker` call and that of an agent the
+loop spawned. The root plugin has no plugin tests: `claude plugin test pipeline-agents`
 (`npm run test:plugin`) is the only plugin-test invocation, since a root run loads the real `pipeline` and never
 loads the nested `pipeline-agents` folder.

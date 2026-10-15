@@ -9,18 +9,19 @@ The database is `.claude/pipeline/pipeline.db`, table `tickets`, read and writte
 
 1. Find the PRs not yet learned from:
    `select ticket_id, title, model, pr_url from tickets where pr_url is not null and learned = 0`
-2. For each PR, read its comments and review threads (for GitHub: `gh pr view <url> --comments` and
-   `gh api repos/<owner>/<repo>/pulls/<n>/comments`) and sort them into:
+2. For each PR, read its comments, general and inline together, with the project's `tracker` tool
+   (`mcp__pipeline-tracker__tracker`, `op: "pr_comments"` with `url`), and its title and whether it merged with
+   `op: "pr_view"`. Sort the comments into:
    - **agent findings**: the latest comment whose first line is `Checked review findings`, posted by the verifier.
      Its numbered list is the findings that survived checking. `Checked review findings: none` means none did.
    - **fixer notes**: the latest comment whose first line is `Fixer notes`, posted by the fixer. Each line
      `<n>. fixed: ...` or `<n>. not fixed: <reason>` is the outcome of finding `<n>` in the checked list.
    - **human comments**: every other review comment and thread.
 
-   Skip a PR whose title still starts with `Draft: ` and has no agent findings comment, unless it is merged or
-   closed: agent review has not finished. A draft PR with a `Checked review findings` comment is processed (the
+   Skip a PR whose title still starts with `Draft: ` and has no agent findings comment, unless it is merged:
+   agent review has not finished. A draft PR with a `Checked review findings` comment is processed (the
    fixer blocked or never ran, and agent review has produced its record).
-   Skip a PR with no agent findings and no human comments unless it is merged or closed. A PR with agent findings
+   Skip a PR with no agent findings and no human comments unless it is merged. A PR with agent findings
    and no human comments is processed.
 3. Classify what each PR raised:
    - a finding the fixer **fixed** is a confirmed implementer mistake: learn from it.
