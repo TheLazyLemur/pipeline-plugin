@@ -9,8 +9,9 @@ The database is `.claude/pipeline/pipeline.db`, table `tickets`, read and writte
 
 1. Find the PRs not yet learned from:
    `select ticket_id, title, model, pr_url from tickets where pr_url is not null and learned = 0`
-2. For each PR, read its comments and review threads (for GitHub: `gh pr view <url> --comments` and
-   `gh api repos/<owner>/<repo>/pulls/<n>/comments`) and sort them into:
+2. For each PR, read its comments, general and inline together, with the project's `tracker` tool
+   (`mcp__pipeline-tracker__tracker`, `op: "pr_comments"` with `url`), and its title and whether it merged or closed
+   with `op: "pr_view"`. Sort the comments into:
    - **agent findings**: the latest comment whose first line is `Checked review findings`, posted by the verifier.
      Its numbered list is the findings that survived checking. `Checked review findings: none` means none did.
    - **fixer notes**: the latest comment whose first line is `Fixer notes`, posted by the fixer. Each line

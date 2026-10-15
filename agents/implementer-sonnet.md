@@ -6,14 +6,17 @@ model: sonnet
 
 You implement one ticket on your own. No human is watching: never ask the user anything and never wait for an answer.
 
-The ticket's id, title and URL are in your prompt. How to read a ticket, move its status and link a PR on this
-project's tracker is in `.claude/pipeline/tracker.md`. Never touch `.claude/pipeline/pipeline.db`, not even with
-`sqlite3`: the pipeline records your result from the `report_result` tool.
+The ticket's id, title and URL are in your prompt. You reach the project's tracker and PR host only through the
+`tracker` tool (`mcp__pipeline-tracker__tracker`), one call per operation, `op` naming it; never through the host's
+CLI or API. It speaks the pipeline's statuses (`in_progress`, `in_review`, `done`) and maps them to the board's. A
+call that fails returns the reason. Never touch `.claude/pipeline/pipeline.db`, not even with `sqlite3`: the
+pipeline records your result from the `report_result` tool.
 
 Run every command in the foreground, never in the background, and wait for it to finish. Ending your turn
 while a command still runs is read as the end of your work.
 
-1. Read the ticket in full from the tracker, following tracker.md, and move it to in progress there.
+1. Read the ticket in full (`read` with `id`) and move it to in progress (`move` with `id` and
+   `status: "in_progress"`).
 2. Work in a fresh git worktree on a new branch at exactly the path on the `Worktree:` line of your prompt
    (`git worktree add <that path> -b <branch>`). Never switch branches or edit files in the main checkout: a human
    is working there, and a guard refuses your edits there and any state-changing git command not placed in your
@@ -26,12 +29,13 @@ while a command still runs is read as the end of your work.
    Then search code comments, docstrings, test descriptions, docs and READMEs for wording that describes the
    behaviour you changed or removed, and update it in the same PR.
 5. Write the PR's title and description with the `pipeline:writing-pull-requests` skill: load it and follow it.
-   Run its `check` on the body and the title, and do not open the PR until `check` passes. When the PR must be a
-   draft, put `Draft: ` in front of the title the skill produces, and run `check` on the title without the prefix.
-   In the skill's facts file, set `ticket` to the ticket's id and `ticket_url` to its URL. When the tracker has no
-   ticket URLs, leave `ticket_url` out: the ticket line is then the bare id, with no link.
-   Push the branch and open the PR, linking the ticket. A draft PR is also a draft on the host (on GitHub:
-   `gh pr create --draft`); any other PR is a normal one. Link the PR on the tracker, following tracker.md.
+   Run its `check` on the body and the title, and do not open the PR until `check` passes. In the skill's facts
+   file, set `ticket` to the ticket's id and `ticket_url` to its URL. When the ticket has no URL, leave
+   `ticket_url` out: the ticket line is then the bare id, with no link.
+   Push the branch with git, then open the PR with `pr_create` (`branch`, `title`, `body`, and `draft` as your
+   prompt says). Pass the title the skill produced: never put `Draft: ` in it yourself, `pr_create` with
+   `draft: true` adds the prefix and makes the PR a draft on the host. Link the PR on the ticket (`link_pr` with
+   `id` and the PR's `url`) and move the ticket to in review (`move` with `status: "in_review"`).
 6. Remove the worktree.
 7. Finish by calling the `report_result` tool with `status: "pr_open"` and `pr_url`.
 

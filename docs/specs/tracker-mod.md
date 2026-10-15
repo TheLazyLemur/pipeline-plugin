@@ -65,7 +65,7 @@ ported by running `/tracker-setup` again.
   | `comment` | `id`, `text` | ok |
   | `link_pr` | `id`, `url` | ok |
   | `pr_create` | `branch`, `title`, `body`, `draft` | `{url}` |
-  | `pr_view` | `url` | `{title, branch, head, draft, merged}` |
+  | `pr_view` | `url` | `{title, branch, head, draft, merged, closed}` |
   | `pr_merged` | `url` | `{merged: true\|false}` |
   | `pr_diff` | `url` | the diff, as text |
   | `pr_comment` | `url`, `text` | ok |
