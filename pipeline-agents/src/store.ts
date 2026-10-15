@@ -62,14 +62,16 @@ create table if not exists turns (
   cache_write_tokens integer not null,
   duration_ms integer not null
 );
-create view if not exists role_usage as
+drop view if exists role_usage;
+create view role_usage as
   select ticket_id, role, group_concat(distinct model) as model, count(*) as turns,
     sum(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) as tokens,
     sum(input_tokens) as input_tokens, sum(output_tokens) as output_tokens,
     sum(cache_read_tokens) as cache_read_tokens, sum(cache_write_tokens) as cache_write_tokens,
     round(sum(duration_ms) / 60000.0, 1) as minutes
   from turns group by ticket_id, role;
-create view if not exists ticket_usage as
+drop view if exists ticket_usage;
+create view ticket_usage as
   select ticket_id, sum(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) as tokens,
     round(sum(duration_ms) / 60000.0, 1) as minutes
   from turns group by ticket_id;`

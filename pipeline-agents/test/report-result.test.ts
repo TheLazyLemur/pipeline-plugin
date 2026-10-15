@@ -138,3 +138,48 @@ test(
     expect(logs).toEqual(['answer {"deny":"no plugin answered"}'])
   },
 )
+
+test(
+  'pipeline-agents records the usage of a turn.complete from an agent the pipeline plugin spawned from its timer',
+  {
+    plugins: [
+      {
+        name: 'pipeline',
+        register(on) {
+          on('session.start', async ($, e, next) => {
+            const started = await next(e)
+            $.clock.after(10_000, async () => {
+              await $.agent.spawn({ description: 'pipeline T-1 verifier', subagentType: 'pipeline:verifier', prompt: 'check' })
+            })
+            return started
+          })
+        },
+      },
+    ],
+  },
+  async ($, on) => {
+    // given
+    // ... a session with the loop stand-in and pipeline-agents, whose sqlite3 calls are kept
+    const clock = mock.clock(on)
+    world(on)
+    const statements: string[] = []
+    on('process.run', async (_, e) => {
+      statements.push(e.argv.at(-1) ?? '')
+      return { value: { exitCode: 0, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    })
+    on('turn.complete', async () => ({ text: '' }))
+    await $.session.start(SESSION)
+
+    // when
+    // ... the loop's timer spawns the verifier, and the engine completes a turn of it
+    await clock.advance(10_000)
+    const usage = { model: 'claude-fable', input_tokens: 1, output_tokens: 2, cache_read_input_tokens: 3, cache_creation_input_tokens: 4 }
+    await $.turn.complete({ agentId: 'agent-1', turnId: 'turn-1', answer: '', durationMs: 90_000, isAborted: false, reason: 'answer', usage })
+
+    // then
+    // ... pipeline-agents' hook wrote the turn against T-1's verifier
+    expect(statements).toEqual([
+      "insert into turns (ticket_id, role, model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, duration_ms) values ('T-1', 'verifier', 'claude-fable', 1, 2, 3, 4, 90000)",
+    ])
+  },
+)

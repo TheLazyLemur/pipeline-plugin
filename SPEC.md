@@ -170,6 +170,7 @@ Holds pipeline status. The tracker owns the ticket itself; SQLite holds our fiel
 | learned | whether /learn has processed the PR |
 
 A `turn.complete` hook in `pipeline-agents` adds one row to the `turns` table per finished turn of a pipeline
+agent, or of an agent one spawned (an Agent call, a fork, found up `parentId`), which counts against that pipeline
 agent: its ticket, role, the model and the input, output, cache read and cache write tokens the event reports, and
 the turn's duration. A turn with no usage (an interrupt, an API error) adds its duration with zero tokens. The views
 `role_usage` (per ticket and role) and `ticket_usage` (per ticket) sum them for `/pipeline-status`. No money

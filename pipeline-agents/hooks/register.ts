@@ -47,12 +47,12 @@ export const register: Register = on => {
     return s.block === undefined ? done : { ...done, block: s.block }
   })
 
-  // each finished turn of a pipeline agent: its tokens and minutes, per ticket and role, for /pipeline-status
+  // each finished turn of a pipeline agent or an agent it spawned: its tokens and minutes, per ticket and role, for /pipeline-status
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) return next(e)
     try {
       const root = await $.session.root()
-      await recordTurn((argv, init) => $.process.run(argv, { cwd: root, ...init }), DB, LOOP_PLUGIN, (await $.agent.list()).find(a => a.id === e.agentId), e)
+      await recordTurn((argv, init) => $.process.run(argv, { cwd: root, ...init }), DB, LOOP_PLUGIN, await $.agent.list(), e.agentId, e)
     } catch (err) {
       $.ui.log(`recording a turn's usage failed: ${(err as Error).message}`)
     }
