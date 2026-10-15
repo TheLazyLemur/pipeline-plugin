@@ -16,6 +16,11 @@ claude --plugin-dir /path/to/pipeline-plugin --plugin-dir /path/to/pipeline-plug
 `pipeline` declares `pipeline-agents` under `dependencies`. With only `pipeline` loaded, the loop runs but no
 agent's result is ever recorded.
 
+A hot reload swaps in changed code (`hooks/`, `src/`) but not the agent definitions: a running session keeps the
+`agents/*.md` prompts it loaded at start, so a change to one needs a session restart. When a reload finds an agent
+prompt changed since session start, the loop logs `agent prompts changed (<files>); restart the session to apply
+them`.
+
 The plugin needs `python3` on the `PATH`: the implementer and fixer write every PR with the
 `pipeline:writing-pull-requests` skill, and its `scripts/pr.py` runs under `python3`.
 
