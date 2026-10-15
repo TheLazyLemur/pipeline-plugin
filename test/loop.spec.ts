@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { basename, join } from 'node:path'
 import { test } from 'node:test'
 import type { AgentInfo, AgentSpawnArgs, AgentSpawnResult, ModelCompleteResult } from 'claude-code'
 import { type Deps, pass } from '../src/loop.ts'
@@ -11,8 +12,8 @@ import { freshProject } from './helpers.ts'
 
 const live = (description: string) => ({ description, status: 'running', spawnedBy: 'pipeline' }) as AgentInfo
 
-/** Deps over a project for session `session`, recording every spawn; `refuse` denies them all. */
-const deps = (run: Run, agents: AgentInfo[], refuse = false, session = 's1') => {
+/** Deps over a project for session `session`, recording every spawn; `refuse` denies them all; `paths` are the main checkout and home, fake unless a test needs them. */
+const deps = (run: Run, agents: AgentInfo[], refuse = false, session = 's1', paths = { root: '/project', home: '/home/u' }) => {
   const spawned: AgentSpawnArgs[] = []
   const d: Deps = {
     run,
@@ -25,6 +26,7 @@ const deps = (run: Run, agents: AgentInfo[], refuse = false, session = 's1') => 
     agents: async () => agents,
     plugin: 'pipeline',
     session,
+    ...paths,
   }
   return { d, spawned }
 }
@@ -183,9 +185,10 @@ test('the next ready ticket is handed to the implementer for its model', async (
   await pass(d)
 
   // then
-  // ... the first ticket goes to the fable implementer, told to open a draft, and is in progress at stage implement
+  // ... the first ticket goes to the fable implementer, told to open a draft and where its worktree is, and is in progress at stage implement
   assert.deepEqual(spawned.map(s => [s.description, s.subagentType]), [['pipeline T-1', 'pipeline:implementer-fable']])
   assert.match(spawned[0]?.prompt ?? '', /with the title prefix "Draft: "/)
+  assert.match(spawned[0]?.prompt ?? '', /^Worktree: \/home\/u\/\.claude\/pipeline-worktrees\/project\/T-1-implementer$/m)
   assert.deepEqual(await sql(run, db, `select ticket_id, status, stage from tickets order by rowid`), [
     { ticket_id: 'T-1', status: 'in_progress', stage: 'implement' },
     { ticket_id: 'T-2', status: 'ready', stage: null },
@@ -295,6 +298,55 @@ test('a difficulty 3+ ticket whose implementer reports a PR moves to review, and
     ],
   )
   assert.match(spawned[0]?.prompt ?? '', /PR: https:\/\/git\/pr\/1/)
+  assert.match(spawned[0]?.prompt ?? '', /^Worktree: \/home\/u\/\.claude\/pipeline-worktrees\/project\/T-1-reviewer-spec$/m)
+})
+
+test('a ticket whose PR merged has its leftover worktrees removed, and another ticket keeps its own', async () => {
+  // given
+  // ... the project is a git repository, ticket 1's PR has merged, and worktrees of ticket 1's fixer and ticket 2's implementer are left under the worktree root
+  const { run, db, root } = await freshProject()
+  await sqliteTracker(run, root, `insert into tickets values (1, 'in_review'), (2, 'in_review');`, ['https://git/pr/1'])
+  await sql(run, db, `insert into tickets (ticket_id, title, status, pr_url) values ('1', 'one', 'pr_open', 'https://git/pr/1'), ('2', 'two', 'pr_open', 'https://git/pr/2')`)
+  for (const argv of [['git', 'init', '-q'], ['git', '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'root']]) assert.equal((await run(argv)).exitCode, 0, argv.join(' '))
+  const home = mkdtempSync(join(tmpdir(), 'pipeline-home-'))
+  const left = join(home, '.claude/pipeline-worktrees', basename(root), '1-fixer')
+  const other = join(home, '.claude/pipeline-worktrees', basename(root), '2-implementer')
+  for (const path of [left, other]) assert.equal((await run(['git', 'worktree', 'add', '-q', '--detach', path])).exitCode, 0)
+  writeFileSync(join(left, 'dirty.txt'), 'uncommitted')
+
+  // when
+  // ... a pass runs
+  const log = await pass(deps(run, [], false, 's1', { root, home }).d)
+
+  // then
+  // ... ticket 1's worktree is gone from disk and from git, ticket 2's stands, and the pass says what it removed
+  assert.equal(existsSync(left), false)
+  assert.equal(existsSync(other), true)
+  assert.doesNotMatch((await run(['git', 'worktree', 'list'])).stdout, /1-fixer/)
+  assert.match((await run(['git', 'worktree', 'list'])).stdout, /2-implementer/)
+  assert.match(log.join('\n'), /1 fixer left a worktree; removed /)
+})
+
+test('a ticket marked done in the tracker has its leftover worktree removed', async () => {
+  // given
+  // ... the project is a git repository, ticket 1 is done in the tracker (its PR unmerged) and pr_open in the table, and its verifier left a worktree
+  const { run, db, root } = await freshProject()
+  await sqliteTracker(run, root, `insert into tickets values (1, 'done');`, [])
+  await sql(run, db, `insert into tickets (ticket_id, title, status, pr_url) values ('1', 'one', 'pr_open', 'https://git/pr/1')`)
+  for (const argv of [['git', 'init', '-q'], ['git', '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'root']]) assert.equal((await run(argv)).exitCode, 0, argv.join(' '))
+  const home = mkdtempSync(join(tmpdir(), 'pipeline-home-'))
+  const left = join(home, '.claude/pipeline-worktrees', basename(root), '1-verifier')
+  assert.equal((await run(['git', 'worktree', 'add', '-q', '--detach', left])).exitCode, 0)
+
+  // when
+  // ... a pass runs
+  const log = await pass(deps(run, [], false, 's1', { root, home }).d)
+
+  // then
+  // ... the ticket is done in the table and its worktree is gone
+  assert.deepEqual(await sql(run, db, `select status from tickets`), [{ status: 'done' }])
+  assert.equal(existsSync(left), false)
+  assert.match(log.join('\n'), /1 verifier left a worktree; removed /)
 })
 
 test('a difficulty 1-2 ticket is told to open a normal PR and goes straight to pr_open', async () => {

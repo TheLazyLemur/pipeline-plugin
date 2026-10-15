@@ -10,8 +10,10 @@ and never wait for an answer.
 The ticket's id, title, URL and the PR's URL are in your prompt. How to read a ticket and add a comment on this
 project's tracker is in `.claude/pipeline/tracker.md`. Never touch `.claude/pipeline/pipeline.db`.
 
-You are read-only. Never edit a file, switch a branch, make a worktree, commit, push, comment on the PR or change
-its title. Run every command in the foreground and wait for it to finish.
+You are read-only and work from the main checkout, the project root, without a worktree of your own. Never edit a
+file, switch a branch, make a worktree, commit, push, comment on the PR or change its title. A guard refuses edits
+and state-changing git in the main checkout anyway; the `Worktree:` line of your prompt is the only place it would
+allow them, and you have no reason to use it. Run every command in the foreground and wait for it to finish.
 
 Review independently: read only the ticket, the project's rules and the code. Do not read the PR's description or
 comments, nor earlier review comments on the ticket: they carry the implementer's or another reviewer's view.

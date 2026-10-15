@@ -16,6 +16,8 @@ export const register: Register = on => {
     const root = await $.session.root()
     // read once, so every claim and heartbeat of this loop carries the same owner
     const session = await $.session.id()
+    const home = await $.env.get('HOME')
+    if (home === undefined) throw new Error('HOME is unset: the agents\' worktrees live under it')
     try {
       const entries = await $.fs.list(`${$.plugin.root}/agents`)
       const now: Prompts = Object.fromEntries(entries.filter(f => f.name.endsWith('.md')).map(f => [f.name, f.mtimeMs]))
@@ -40,6 +42,8 @@ export const register: Register = on => {
           agents: () => $.agent.list(),
           plugin: $.plugin.name,
           session,
+          root,
+          home,
         })
         for (const line of lines) $.ui.log(line)
       } catch (err) {

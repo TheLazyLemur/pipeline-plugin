@@ -47,3 +47,12 @@ Things SPEC.md does not settle. Everything else the build decided is described i
     `fixer.md` and left its PR a draft. The loop keeps each prompt file's mtime from session start in `$.state`
     (declared in `types/pipeline.d.ts`), and each reload that finds one changed, added or removed since then logs a
     line naming them and asking for a restart. A file touched but not edited counts as changed.
+14. **The worktree guard stops accidents, not deliberate evasion.** It checks `Edit`, `Write`, `NotebookEdit` and
+    the first bare `git` word of each simple command in a Bash command line, wherever it sits (so `rtk proxy git`,
+    `timeout 30 git`, `sudo git` and `sh -c 'git …'` are checked, and a word `git` that is not the command, as in
+    `grep git src`, is refused as unplaceable). General shell writes in the main checkout (`sed -i`, `>`, `mv`,
+    `rm`, `cp`, scripts) are not detected, nor is git run from a Makefile, an npm script or a file the agent wrote.
+    Paths are compared as text, so a symlink into the main checkout gets through, as does a path that differs only
+    in case on a case-insensitive filesystem (macOS by default: `/Users/x/Code/app` for `/Users/x/code/app`), and a
+    subshell's `cd` is taken to persist. Only the main checkout is protected: a worktree of another ticket or any
+    other folder on disk is not.

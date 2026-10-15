@@ -77,7 +77,7 @@ A waiting ticket with a blocker that is not done is held: sync does not insert i
 A plugin's hooks never run for agents that the same plugin spawned from its own code, and every pipeline agent is
 spawned from the loop's timer (`docs/adr/0001`). So the repo ships two plugins. `pipeline` (the repo root) runs the
 loop: the timer, sync, triage, spawning every agent, and the notice filter. `pipeline-agents` (`pipeline-agents/`)
-holds every hook that must hear those agents: `report_result`, the `pipeline.db` guard, the `tool.check` allow and
+holds every hook that must hear those agents: `report_result`, the `pipeline.db` guard, the worktree guard, the `tool.check` allow and
 the `SubagentStop` guard, the `turn.complete` hook that records their usage and the agent limits. It recognises them as agents spawned by `pipeline`. The code both use (the store, agent
 identity, results, the review threshold and the limits) lives in `pipeline-agents/src/`, since a plugin can import only from inside
 its own folder; `src/` holds the loop's own code. `pipeline` declares `pipeline-agents` under `dependencies`.
@@ -107,6 +107,28 @@ fixer whose ticket is still at its stage from stopping once, with a reason telli
 again, the ticket goes to needs_human. The stage check in each pass covers an agent that crashes or is killed. The
 implementer and the fixer work in their own git worktree, so they never switch branches in the checkout you are
 using.
+
+### Worktrees and the worktree guard
+Design: `docs/specs/worktree-guards.md`. Every agent's worktree is at a path the loop chooses and states on a
+`Worktree:` line of the spawn prompt: `~/.claude/pipeline-worktrees/<project>/<ticket>-<role>`, where `<project>`
+is the project root's folder name and `<role>` is `implementer`, `reviewer-spec`, `reviewer-quality`, `verifier`
+or `fixer`. A restarted agent gets the same path. The implementer and the fixer make their worktree there; the
+reviewers and the verifier are read-only in the main checkout and make none.
+
+The guard, a `tool.call` hook in `pipeline-agents` on the pipeline agents only, refuses `Edit`, `Write` and
+`NotebookEdit` whose target resolves inside the main checkout (the session root), and a Bash command whose
+state-changing git command is not placed in the agent's own worktree by `cd <worktree> && …` or
+`git -C <worktree> …`. Read-only git runs anywhere: `status`, `log`, `diff`, `show`, `fetch`, `rev-parse`,
+`worktree`, `ls-files`, `ls-tree`, `ls-remote`, `blame`, `grep`, `describe`, `cat-file`, `rev-list`, `merge-base`,
+`reflog`, `version`, `shortlog`, `for-each-ref`, `show-ref`, `name-rev`, `check-ignore`, `diff-tree`, `var`,
+`count-objects`, a `branch` or `tag` that lists, `stash list`/`show`, `remote` with `-v`/`show`/`get-url` and a
+`config` read (`--get*`, `--list`, `-l`). The `git` word is found wherever it sits in a simple command, so git
+behind a wrapper (`rtk proxy`, `timeout`, `sudo`, `sh -c`) is checked too. It fails closed: a path or command it
+cannot place (a `$VAR`, `cd -`) is refused, and so is the call when the check itself throws. `.`, `..` and `~` are
+resolved as text; symlinks are not. Every refusal names the worktree to use and says whether the command sat in the
+main checkout or merely outside the worktree. Its known gaps are in NOTES.md. When a ticket reaches `done`, by a
+merged PR or by the tracker's own done list, the pass removes every worktree left under the ticket's five paths
+(`git worktree remove --force`, then `git worktree prune`) and touches nothing else.
 
 ### Agent review (difficulty at or above the review threshold)
 Design: `docs/specs/agent-review.md`. The threshold is routing.md's `Review threshold: <n>` line (3 when the line is
@@ -245,5 +267,5 @@ file should change so it does not happen again — CLAUDE.md, rules, the impleme
 rubric.md or checklists. The human approves each change. Marks the PR learned.
 
 ## Not in this version
-A separate inbox (the needs_human status covers it), calibration dashboards, status band, guards, worktree management by the mod (the implementer makes its own). The mod runs the loop and nothing else.
+A separate inbox (the needs_human status covers it), calibration dashboards, status band. The mod runs the loop, the worktree guard and the worktree cleanup, and nothing else.
 Add any of these only when a real need shows up.
