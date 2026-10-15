@@ -327,6 +327,28 @@ test('a ticket whose PR merged has its leftover worktrees removed, and another t
   assert.match(log.join('\n'), /1 fixer left a worktree; removed /)
 })
 
+test('a ticket marked done in the tracker has its leftover worktree removed', async () => {
+  // given
+  // ... the project is a git repository, ticket 1 is done in the tracker (its PR unmerged) and pr_open in the table, and its verifier left a worktree
+  const { run, db, root } = await freshProject()
+  await sqliteTracker(run, root, `insert into tickets values (1, 'done');`, [])
+  await sql(run, db, `insert into tickets (ticket_id, title, status, pr_url) values ('1', 'one', 'pr_open', 'https://git/pr/1')`)
+  for (const argv of [['git', 'init', '-q'], ['git', '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'root']]) assert.equal((await run(argv)).exitCode, 0, argv.join(' '))
+  const home = mkdtempSync(join(tmpdir(), 'pipeline-home-'))
+  const left = join(home, '.claude/pipeline-worktrees', basename(root), '1-verifier')
+  assert.equal((await run(['git', 'worktree', 'add', '-q', '--detach', left])).exitCode, 0)
+
+  // when
+  // ... a pass runs
+  const log = await pass(deps(run, [], false, 's1', { root, home }).d)
+
+  // then
+  // ... the ticket is done in the table and its worktree is gone
+  assert.deepEqual(await sql(run, db, `select status from tickets`), [{ status: 'done' }])
+  assert.equal(existsSync(left), false)
+  assert.match(log.join('\n'), /1 verifier left a worktree; removed /)
+})
+
 test('a difficulty 1-2 ticket is told to open a normal PR and goes straight to pr_open', async () => {
   // given
   // ... a ready difficulty 2 sonnet ticket

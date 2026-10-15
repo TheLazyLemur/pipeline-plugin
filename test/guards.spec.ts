@@ -22,6 +22,18 @@ test('the worktree is under the home worktree root, named by project, ticket and
   assert.equal(path, '/home/u/.claude/pipeline-worktrees/app/T-1-reviewer-spec')
 })
 
+test('a project folder name with a space and parentheses names a worktree', () => {
+  // given
+  // ... a project root whose folder name holds a space and parentheses
+  // when
+  // ... the worktree is named
+  const path = worktreeOf(HOME, '/home/u/My Project (copy)', 'T-1', 'implementer')
+
+  // then
+  // ... the folder name is used as is
+  assert.equal(path, '/home/u/.claude/pipeline-worktrees/My Project (copy)/T-1-implementer')
+})
+
 test('a ticket id that is not one path segment cannot name a worktree', () => {
   // given
   // ... a ticket id escaping the worktree root
@@ -172,7 +184,26 @@ test('git -C the main checkout is refused', () => {
 test('read-only git runs from anywhere', () => {
   // given
   // ... read-only git commands from the main checkout, with and without -C, plus a worktree add
-  const inputs = ['git status && git log --oneline -3', `git -C ${ROOT} diff main...HEAD | head`, 'git show abc:path', 'git fetch origin x', 'git rev-parse HEAD', `git worktree add ${WT} -b b`, 'git worktree list', `git worktree remove ${WT}`, 'git branch --show-current']
+  const inputs = [
+    'git status && git log --oneline -3',
+    `git -C ${ROOT} diff main...HEAD | head`,
+    'git show abc:path',
+    'git fetch origin x',
+    'git rev-parse HEAD',
+    `git worktree add ${WT} -b b`,
+    'git worktree list',
+    `git worktree remove ${WT}`,
+    'git branch --show-current',
+    'git branch --list "feat*"',
+    'git branch -a --contains abc',
+    'git merge-base main HEAD',
+    'git stash list',
+    'git reflog -5',
+    'git remote -v',
+    'git config --get user.name',
+    'git tag -l',
+    'git version',
+  ]
 
   // when
   // ... each is checked
@@ -181,6 +212,36 @@ test('read-only git runs from anywhere', () => {
   // then
   // ... all run
   assert.deepEqual(denies, inputs.map(() => undefined))
+})
+
+test('git behind a wrapper or an assignment is still checked', () => {
+  // given
+  // ... state-changing git from the main checkout behind rtk proxy, timeout, sudo, sh -c, a -c option and a leading assignment, plus a cd to a folder named like a wrapper
+  const inputs = ['rtk proxy git commit -m x', 'timeout 30 git commit -m x', 'sudo git commit -m x', "sh -c 'git commit -m x'", 'git -c x=y commit -m x', 'A=1 git commit -m x', 'cd env && git commit -m x']
+
+  // when
+  // ... each is checked
+  const denies = inputs.map(command => check('Bash', { command }))
+
+  // then
+  // ... every one is refused as a commit in the main checkout or under it
+  for (const deny of denies) assert.match(String(deny), /git commit in \/home\/u\/code\/app/)
+})
+
+test('git that changes branches, tags, stashes, remotes or config is refused outside the worktree', () => {
+  // given
+  // ... such commands from the main checkout, and one placed in a folder that is neither
+  const inputs = ['git branch -D old', 'git branch -f main abc', 'git tag v1', 'git stash', 'git remote add up x', 'git config user.name x', 'git -C /tmp/x commit -m x']
+
+  // when
+  // ... each is checked
+  const denies = inputs.map(command => check('Bash', { command }))
+
+  // then
+  // ... all are refused, and the one outside the main checkout is told it is not in the worktree
+  assert.match(String(denies[0]), /git branch in \/home\/u\/code\/app: pipeline agents never change the main checkout/)
+  for (const deny of denies.slice(1, 6)) assert.match(String(deny), /pipeline agents never change the main checkout/)
+  assert.match(String(denies[6]), /git commit in \/tmp\/x, which is not your worktree/)
 })
 
 test('a git command it cannot place is refused', () => {

@@ -7,13 +7,14 @@ export const WORKTREES = '.claude/pipeline-worktrees'
 /** The tools the worktree guard checks. */
 export const GUARDED = ['Edit', 'Write', 'NotebookEdit', 'Bash'] as const
 
-/** One path segment a worktree name may be built from: a ticket id or a project folder name. */
-const SEGMENT = /^[\w.@+-]+$/
+/** A ticket id names one path segment; a project folder name is only kept out of `.`, `..`, empty and a `/`. */
+const TICKET = /^[\w.@+-]+$/
+const bad = (part: string, strict: boolean) => part === '' || part === '.' || part === '..' || part.includes('/') || (strict && !TICKET.test(part))
 
-/** The worktree of `role` for `ticket` of the project at `root`; throws on a ticket id or project name that is not one path segment. */
+/** The worktree of `role` for `ticket` of the project at `root`; throws on a ticket id or project name that cannot be one path segment. */
 export const worktreeOf = (home: string, root: string, ticket: string, role: Role): string => {
   const project = root.replace(/\/+$/, '').split('/').pop() ?? ''
-  for (const part of [project, ticket]) if (!SEGMENT.test(part) || part === '.' || part === '..') throw new Error(`cannot name a worktree from ${JSON.stringify(part)}`)
+  for (const [part, strict] of [[project, false], [ticket, true]] as const) if (bad(part, strict)) throw new Error(`cannot name a worktree from ${JSON.stringify(part)}`)
   return `${home}/${WORKTREES}/${project}/${ticket}-${role}`
 }
 
@@ -36,19 +37,24 @@ export const resolve = (path: string, cwd: string | null, home: string): string 
 
 const within = (path: string, dir: string) => path === dir || path.startsWith(`${dir}/`)
 
-/** Git subcommands that change nothing, allowed from anywhere; `branch` is one when it only lists. */
-const READ_ONLY = new Set(['status', 'log', 'diff', 'show', 'fetch', 'rev-parse', 'worktree', 'ls-files', 'ls-tree', 'ls-remote', 'blame', 'grep', 'describe', 'cat-file', 'rev-list'])
-const listsBranches = (args: string[]) => args.every(a => a.startsWith('-')) && !args.some(a => /^-[dDmMcCu]|^--(delete|move|copy|set-upstream-to|unset-upstream)/.test(a))
+/** Git subcommands that change nothing, allowed from anywhere. */
+const READ_ONLY = new Set(['status', 'log', 'diff', 'show', 'fetch', 'rev-parse', 'worktree', 'ls-files', 'ls-tree', 'ls-remote', 'blame', 'grep', 'describe', 'cat-file', 'rev-list', 'merge-base', 'reflog', 'version', 'shortlog', 'for-each-ref', 'show-ref', 'name-rev', 'check-ignore', 'diff-tree', 'var', 'count-objects'])
+/** Subcommands that change nothing with these arguments: a listing `branch`, `tag`, `stash`, `remote` and a `config` read. */
+const READS: Record<string, (args: string[]) => boolean> = {
+  branch: args => !args.some(a => /^-[dDmMcCuf]|^--(delete|move|copy|force|set-upstream-to|unset-upstream)/.test(a)),
+  tag: args => args.length === 0 || args.includes('-l') || args.includes('--list'),
+  stash: args => args[0] === 'list' || args[0] === 'show',
+  remote: args => args.length === 0 || args[0] === 'show' || args[0] === 'get-url' || args[0]!.startsWith('-'),
+  config: args => args.some(a => a === '-l' || a.startsWith('--get') || a.startsWith('--list')),
+}
+const readOnly = (sub: string, args: string[]) => READ_ONLY.has(sub) || (READS[sub]?.(args) ?? false)
 
-/** Words a command may start with before the command itself. */
-const WRAPPERS = new Set(['rtk', 'command', 'exec', 'env', 'time'])
-
-/** Each simple command of a shell command line, roughly: split on the shell's separators, subshells and substitutions. */
+/** Each simple command of a shell command line, roughly: split on the shell's separators, subshells and substitutions; a word's outer quotes are dropped so `sh -c 'git …'` shows its git. */
 const commands = (command: string) =>
   command
     .split(/\|\||&&|[;|&()\n`]/)
-    .map(s => s.trim().split(/\s+/).filter(w => !/^\w+=/.test(w) && !WRAPPERS.has(w)))
-    .filter(w => w.length > 0)
+    .map(s => s.trim().split(/\s+/).map(w => w.replace(/^["']|["']$/g, '')))
+    .filter(w => w[0] !== '')
 
 /**
  * The state-changing git command of `command` that is not placed in `worktree`, as `[subcommand, where]` (`where`
@@ -62,16 +68,16 @@ const misplacedGit = (command: string, root: string, home: string, worktree: str
       cwd = words[1] === undefined ? home : resolve(words[1], cwd, home)
       continue
     }
-    if (words[0] !== 'git') continue
+    // git anywhere in the command, so a wrapper the guard does not know (rtk proxy, timeout, sudo, sh -c) fails closed
+    let i = words.indexOf('git')
+    if (i === -1) continue
     let where = cwd
-    let i = 1
-    for (; i < words.length && words[i]!.startsWith('-'); i++) {
+    for (i++; i < words.length && words[i]!.startsWith('-'); i++) {
       if (words[i] === '-C') where = resolve(words[++i] ?? '', where, home)
       else if (words[i] === '-c') i++
     }
     const sub = words[i]
-    const args = words.slice(i + 1)
-    if (sub === undefined || READ_ONLY.has(sub) || (sub === 'branch' && listsBranches(args))) continue
+    if (sub === undefined || readOnly(sub, words.slice(i + 1))) continue
     if (where === null || !within(where, worktree)) return [sub, where]
   }
   return undefined
@@ -98,7 +104,8 @@ export const worktreeRefusal = (agent: AgentInfo | undefined, plugin: string, ro
   if (tool === 'Bash') {
     const bad = misplacedGit(String(input.command ?? ''), main, home, worktree)
     if (bad === undefined) return undefined
-    return `git ${bad[0]} ${bad[1] === null ? 'cannot be placed' : `in ${bad[1]}`}: pipeline agents never change the main checkout. ${how(worktree)}`
+    const place = bad[1] === null ? 'cannot be placed' : within(bad[1], main) ? `in ${bad[1]}: pipeline agents never change the main checkout` : `in ${bad[1]}, which is not your worktree`
+    return `git ${bad[0]} ${place}. ${how(worktree)}`
   }
   const path = resolve(target(input), main, home)
   if (path === null) return `${tool} to a path that cannot be placed (${JSON.stringify(target(input))}): pipeline agents never change the main checkout. ${how(worktree)}`

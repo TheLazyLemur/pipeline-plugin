@@ -93,16 +93,16 @@ export const pass = async (d: Deps): Promise<string[]> => {
   // 1. a merged PR marks its ticket done before sync, so dependents it was holding are released in this pass
   // 2. sync, so what it adds is triaged in this pass
   // a tracker that fails or times out (a laptop waking from sleep) must not hold up the tickets already in the table
-  let closed: string[] = []
+  const done: string[] = []
   try {
-    closed = await closeMerged(d.run, DB, tracker)
+    const closed = await closeMerged(d.run, DB, tracker)
     for (const id of closed) log.push(`${id} is done: its PR merged`)
-    await sync(d.run, DB, tracker)
+    done.push(...closed, ...(await sync(d.run, DB, tracker)))
   } catch (err) {
     log.push(`tracker unreachable: ${(err as Error).message}`)
   }
-  // a done ticket's agents are gone: whatever worktree one left behind goes
-  for (const id of closed) log.push(...(await removeWorktrees(d, id)))
+  // a done ticket's agents are gone, however it got there: whatever worktree one left behind goes
+  for (const id of done) log.push(...(await removeWorktrees(d, id)))
 
   // 3. triage; a failed ticket stays new and is retried next pass
   const fresh = (await sql(d.run, DB, `select ticket_id, title, url, body from tickets where status = 'new' order by rowid`)) as Ticket[]

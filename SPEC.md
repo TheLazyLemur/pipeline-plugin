@@ -117,12 +117,17 @@ reviewers and the verifier are read-only in the main checkout and make none.
 
 The guard, a `tool.call` hook in `pipeline-agents` on the pipeline agents only, refuses `Edit`, `Write` and
 `NotebookEdit` whose target resolves inside the main checkout (the session root), and a Bash command whose
-state-changing git command (anything but `status`, `log`, `diff`, `show`, `fetch`, `rev-parse`, `worktree`,
-`ls-files`, `ls-tree`, `ls-remote`, `blame`, `grep`, `describe`, `cat-file`, `rev-list` and a listing `branch`) is
-not placed in the agent's own worktree by `cd <worktree> && …` or `git -C <worktree> …`. It fails closed: a path or
-command it cannot place (a `$VAR`, `cd -`) is refused, and so is the call when the check itself throws. `.`, `..`
-and `~` are resolved as text; symlinks are not. Every refusal names the worktree to use. Its known gaps are in
-NOTES.md. When a ticket's PR merges, the pass removes every worktree left under the ticket's five paths
+state-changing git command is not placed in the agent's own worktree by `cd <worktree> && …` or
+`git -C <worktree> …`. Read-only git runs anywhere: `status`, `log`, `diff`, `show`, `fetch`, `rev-parse`,
+`worktree`, `ls-files`, `ls-tree`, `ls-remote`, `blame`, `grep`, `describe`, `cat-file`, `rev-list`, `merge-base`,
+`reflog`, `version`, `shortlog`, `for-each-ref`, `show-ref`, `name-rev`, `check-ignore`, `diff-tree`, `var`,
+`count-objects`, a `branch` or `tag` that lists, `stash list`/`show`, `remote` with `-v`/`show`/`get-url` and a
+`config` read (`--get*`, `--list`, `-l`). The `git` word is found wherever it sits in a simple command, so git
+behind a wrapper (`rtk proxy`, `timeout`, `sudo`, `sh -c`) is checked too. It fails closed: a path or command it
+cannot place (a `$VAR`, `cd -`) is refused, and so is the call when the check itself throws. `.`, `..` and `~` are
+resolved as text; symlinks are not. Every refusal names the worktree to use and says whether the command sat in the
+main checkout or merely outside the worktree. Its known gaps are in NOTES.md. When a ticket reaches `done`, by a
+merged PR or by the tracker's own done list, the pass removes every worktree left under the ticket's five paths
 (`git worktree remove --force`, then `git worktree prune`) and touches nothing else.
 
 ### Agent review (difficulty at or above the review threshold)

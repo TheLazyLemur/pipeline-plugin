@@ -67,8 +67,8 @@ const id = (heading: string, row: Row, field = 'id') => {
   return bad(heading, row, field)
 }
 
-/** Pulls the tracker into the pipeline table, following the three commands in tracker.md, in one transaction. */
-export const sync = async (run: Run, db: string, tracker: string) => {
+/** Pulls the tracker into the pipeline table, following the three commands in tracker.md, in one transaction. Resolves the ids it marked done. */
+export const sync = async (run: Run, db: string, tracker: string): Promise<string[]> => {
   const [waiting, done, blockers] = await Promise.all([list(run, tracker, WAITING), list(run, tracker, DONE), list(run, tracker, BLOCKERS)])
 
   const blocked = new Set<string>()
@@ -90,7 +90,11 @@ export const sync = async (run: Run, db: string, tracker: string) => {
   }
   // a ticket that became blocked leaves until its blockers are done, unless work on it has started
   for (const ticket of blocked) statements.push(`delete from tickets where ticket_id = ${lit(ticket)} and status in ('new', 'ready');`)
-  for (const t of done) statements.push(`update tickets set status = 'done', restarts = 0 where ticket_id = ${lit(id(DONE, t))};`)
+  const ids = done.map(t => id(DONE, t))
+  for (const ticket of ids) statements.push(`update tickets set status = 'done', restarts = 0 where ticket_id = ${lit(ticket)};`)
   statements.push('commit;')
+  // read before the write: sqlite3 -json prints one array per statement, so a returning inside the transaction would not parse
+  const marked = ids.length === 0 ? [] : await sql(run, db, `select ticket_id from tickets where status != 'done' and ticket_id in (${ids.map(lit).join(', ')})`)
   await sql(run, db, statements.join('\n'))
+  return marked.map(r => String(r.ticket_id))
 }
