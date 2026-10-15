@@ -78,8 +78,8 @@ A plugin's hooks never run for agents that the same plugin spawned from its own 
 spawned from the loop's timer (`docs/adr/0001`). So the repo ships two plugins. `pipeline` (the repo root) runs the
 loop: the timer, sync, triage, spawning every agent, and the notice filter. `pipeline-agents` (`pipeline-agents/`)
 holds every hook that must hear those agents: `report_result`, the `pipeline.db` guard, the `tool.check` allow and
-the `SubagentStop` guard and the `turn.complete` hook that records their usage. It recognises them as agents spawned by `pipeline`. The code both use (the store, agent
-identity, results, the review threshold) lives in `pipeline-agents/src/`, since a plugin can import only from inside
+the `SubagentStop` guard, the `turn.complete` hook that records their usage and the agent limits. It recognises them as agents spawned by `pipeline`. The code both use (the store, agent
+identity, results, the review threshold and the limits) lives in `pipeline-agents/src/`, since a plugin can import only from inside
 its own folder; `src/` holds the loop's own code. `pipeline` declares `pipeline-agents` under `dependencies`.
 
 ### The agents' results
@@ -126,6 +126,30 @@ missing). Such a ticket's implementer opens its PR as a draft on the host (on Gi
 One round only. Every stage is read from the table and the live agents each pass, so a reload or restart picks up
 where it was. An agent that cannot be spawned sends the ticket to needs_human with the PR still a draft.
 
+### Agent limits
+Design: `docs/specs/agent-limits.md`. Every agent the loop spawns for a ticket (implementer, both reviewers,
+verifier, fixer) runs within two limits per run, from routing.md's `Agent token limit: <n>` and
+`Agent time limit: <minutes>` lines (500000 and 120 when missing; one pair for every model and role):
+
+- **context tokens**: the input side (uncached, cache-written and cache-read) of its latest model request that
+  reported usage, as Claude Code's status line counts context;
+- **wall time**: from its first model request to now.
+
+All of it is in `pipeline-agents` (`src/limits.ts`). A `turn.step` hook opens the run's `agent_runs` row at its
+first request and records each request's count and context. A `tool.call` hook, from 80% of either limit, attaches
+once per limit to the agent's next tool result: "You've used 80% of your <token|time> limit. Finish the step you're
+on, push what you have, and report. Don't start new work." At 100% of either it soft-stops the run: every tool call
+but `report_result` is refused with "Limit reached (<which>): call report_result now with what you have." Two model
+requests after the soft stop, a run that has not reported is hard-stopped: the `turn.step` hook answers its
+requests without sending them, so it ends. A report made before then is recorded as normal. On a hard-stopped
+agent's stop the `SubagentStop` hook does not block it; its ticket, if still at the agent's stage, goes to
+needs_human with a question naming the limit. A soft-stopped reviewer, which cannot post its comment, is treated the
+same when it stops, even inside the two requests. A restarted agent is a new agent with a new row,
+so fresh limits; the rows live in `pipeline.db`, so a reload or restart keeps them. Each nudge, soft stop and hard
+stop logs one line naming the ticket, role and limit. A limit takes effect at the agent's next tool call or model
+request, never inside a running tool call; the main session and agents the loop did not spawn are not limited. The limits fail open: an
+error in either hook (a sqlite failure, a bad limit line in routing.md) is logged and the request or call goes ahead.
+
 ### Permissions and notices
 The loop's agents run unattended. A `tool.check` hook allows every tool call of the loop's agents (described
 `pipeline <ticket>` for the implementer, `pipeline <ticket> <role>` for the review agents)
@@ -135,7 +159,8 @@ notice of those agents, which would start a turn on the main thread; you still s
 
 ### Needing you
 A ticket goes to needs_human when triage finds it not ready (missing acceptance criteria, open questions),
-the implementer is blocked or ends without a result, or its implementer disappears. The question is stored on
+the implementer is blocked or ends without a result, an agent is hard-stopped at its limit, or its implementer
+disappears. The question is stored on
 the ticket. `/pipeline-status` in your session lists them; your answer is saved as a comment on the tracker
 ticket and it goes back to new or ready.
 
@@ -184,6 +209,11 @@ the turn's duration. A turn with no usage (an interrupt, an API error) adds its 
 `role_usage` (per ticket and role) and `ticket_usage` (per ticket) sum them for `/pipeline-status`. No money
 estimate.
 
+The `agent_runs` table holds one row per pipeline agent run, keyed by agent id: its ticket and role, `started_at`
+(epoch ms of its first model request), `requests` sent, `context_tokens`, `nudged_token` and `nudged_time`, and
+`soft_stop_at` (the request count at the soft stop) with `soft_limit`. `pipeline-agents` runs the migration itself
+at session start when `.claude/pipeline/` exists, so its hooks never write before the loop's first pass.
+
 Read and written with the `sqlite3` CLI.
 
 ### Triage (`src/triage.ts`, not a skill)
@@ -195,6 +225,7 @@ title, URL and body. Writes status, difficulty, confidence, model and reason.
 A short table: difficulty to model. Example: 1-2 sonnet, 3-4 opus, 5 fable. Security-critical goes to fable.
 Applied by Haiku at triage, not by a parser, and only to sonnet, opus or fable, the models with an implementer.
 Its `Review threshold: <n>` line is read by the mod: the difficulty at and above which a ticket gets agent review.
+Its `Agent token limit: <n>` and `Agent time limit: <minutes>` lines are the agent limits.
 
 ### Implementers (`agents/implementer-sonnet.md`, `-opus.md`, `-fable.md`)
 Spawned by the loop for the routed model. Each reads the ticket, works in its own worktree, implements it, runs the

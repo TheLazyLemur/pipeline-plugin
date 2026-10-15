@@ -1,7 +1,8 @@
 import type { AgentInfo } from 'claude-code'
 import { type Role, agentOf } from './agents.ts'
+import { isHardStopped, readRun } from './limits.ts'
 import { DB, type Run, type Stage, type Ticket, lit, sql } from './store.ts'
-import { reviewFrom } from './routing.ts'
+import { readRouting, reviewFrom } from './routing.ts'
 
 export const REPORT_TOOL = {
   name: 'report_result',
@@ -99,8 +100,7 @@ export const report = async (run: Run, db: string, plugin: string, agent: AgentI
  * this plugin and its own calls would skip them (docs/adr/0001). Resolves one log line and, for a refusal, `deny`.
  */
 export const onReport = async (run: Run, plugin: string, agent: AgentInfo | undefined, input: Record<string, unknown>): Promise<{ log: string; changed: boolean; deny?: string }> => {
-  const routing = await run(['cat', '.claude/pipeline/routing.md'])
-  const r = await report(run, DB, plugin, agent, input, reviewFrom(routing.exitCode === 0 ? routing.stdout : ''))
+  const r = await report(run, DB, plugin, agent, input, reviewFrom(await readRouting(run)))
   return { log: r.log, changed: r.changed, deny: r.deny }
 }
 
@@ -115,11 +115,26 @@ export const dbRefusal = (agent: AgentInfo | undefined, plugin: string, tool: st
 
 export type Stop = { block?: string; log?: string }
 
-/** Handles a pipeline agent stopping: an agent that must report is blocked once while its ticket is still at its stage, then the ticket goes to needs_human. */
+/** The stage each role works at, reviewers included. */
+const WORKS_AT: Record<Role, Stage> = { implementer: 'implement', 'reviewer-spec': 'review', 'reviewer-quality': 'review', verifier: 'verify', fixer: 'fix' }
+
+/**
+ * Handles a pipeline agent stopping: one hard-stopped at a limit, or a reviewer soft-stopped at one, sends its
+ * ticket, if still at its stage, to needs_human naming the limit; an agent that must report is blocked once while its ticket is still at its stage,
+ * then the ticket goes to needs_human.
+ */
 export const stop = async (run: Run, db: string, plugin: string, agent: AgentInfo | undefined, isContinued: boolean): Promise<Stop> => {
   const who = agentOf(agent, plugin)
-  const stage = who === null ? undefined : REPORTS_AT[who.role]
-  if (who === null || stage === undefined) return {}
+  if (who === null || agent === undefined) return {}
+  const limited = await readRun(run, db, agent.id)
+  // a soft-stopped reviewer cannot post its comment, so it ends without its review even inside the grace
+  if (limited !== undefined && (isHardStopped(limited) || (REPORTS_AT[who.role] === undefined && limited.soft_stop_at !== null))) {
+    const question = `The ${who.role} reached its ${limited.soft_limit} limit (Agent ${limited.soft_limit} limit in routing.md) and was stopped without reporting. Check its branch and PR, then send the ticket back to new or set it pr_open.`
+    const moved = await settle(run, db, who.ticket, WORKS_AT[who.role], `status = 'needs_human', restarts = 0, question = ${lit(question)}`)
+    return moved ? { log: `${who.ticket} needs you: its ${who.role} was stopped at its ${limited.soft_limit} limit` } : {}
+  }
+  const stage = REPORTS_AT[who.role]
+  if (stage === undefined) return {}
   const [open] = await sql(run, db, `select 1 from tickets where ticket_id = ${lit(who.ticket)} and status = 'in_progress' and coalesce(stage, 'implement') = ${lit(stage)}`)
   if (open === undefined) return {}
   if (!isContinued) return { block: `Call the ${REPORT_TOOL.name} tool before you stop: status ${SENDS[who.role]?.join(' or ')}, with the field it needs.` }

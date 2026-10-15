@@ -1,7 +1,9 @@
-import type { Register } from 'claude-code'
+import type { ModelUsage, Register } from 'claude-code'
 import { LOOP_PLUGIN, agentOf } from '../src/agents.ts'
 import { REPORT_TOOL, dbRefusal, onReport, stop } from '../src/result.ts'
-import { DB, type Run } from '../src/store.ts'
+import { type Verdict, decide, markTold, nudgeText, openRun, readRun, recordRequest, softStopText } from '../src/limits.ts'
+import { limitsFrom, readRouting } from '../src/routing.ts'
+import { DB, type Run, migrate } from '../src/store.ts'
 import { recordTurn } from '../src/usage.ts'
 
 // Every hook that must hear the loop's agents lives here, not in pipeline: a plugin never hears the agents it
@@ -10,24 +12,105 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     // awaited before next, so the tool is listed by the implementers' first turn
     await $.tool.register(REPORT_TOOL)
-    return next(e)
-  })
-
-  // a pipeline agent's result; refused for any other caller, written only while its ticket is at that agent's stage
-  on('tool.call', async ($, e, next) => {
-    if (e.tool !== `mcp__${$.plugin.name}__${REPORT_TOOL.name}`) return next(e)
-    const agent = (await $.agent.list()).find(a => a.id === e.agentId)
+    // the limits write agent_runs from an agent's first request, which may come before the loop's first pass migrates
     try {
       const root = await $.session.root()
       const run: Run = (argv, init) => $.process.run(argv, { cwd: root, ...init })
-      const r = await onReport(run, LOOP_PLUGIN, agent, e as Record<string, unknown>)
-      $.ui.log(r.log)
-      if (r.deny !== undefined) return { deny: r.deny }
-      return { result: r.changed ? 'Recorded.' : 'Not recorded: the ticket is no longer at your stage.' }
+      if ((await run(['test', '-d', '.claude/pipeline'])).exitCode === 0) await migrate(run, DB)
     } catch (err) {
-      $.ui.log(`report_result failed: ${(err as Error).message}`)
-      return { deny: (err as Error).message }
+      $.ui.log(`migrating the pipeline database failed: ${(err as Error).message}`)
     }
+    return next(e)
+  })
+
+  // the limits, per model request of a pipeline agent: its start and context are recorded, and once the soft stop's
+  // grace is spent the request is answered without being sent, so the agent ends. The soft stop itself is the
+  // tool-call hook's. They fail open: an error is logged and the request is sent
+  on('turn.step', async function* ($, e, next) {
+    let hard: string | null = null
+    let count: ((usage: ModelUsage | null) => Promise<unknown>) | null = null
+    try {
+      const agentId = e.agentId
+      const who = agentId === undefined ? null : agentOf((await $.agent.list()).find(a => a.id === agentId), LOOP_PLUGIN)
+      if (agentId !== undefined && who !== null) {
+        const root = await $.session.root()
+        const run: Run = (argv, init) => $.process.run(argv, { cwd: root, ...init })
+        const now = await $.clock.now()
+        const r = await openRun(run, DB, agentId, who, now)
+        count = usage => recordRequest(run, DB, agentId, usage)
+        const v = decide(r, now, limitsFrom(await readRouting(run)))
+        if (v?.kind === 'hard') {
+          $.ui.log(`${who.ticket} ${who.role} hard-stopped at its ${v.limit} limit`)
+          hard = `Stopped: the ${v.limit} limit was reached.`
+        }
+      }
+    } catch (err) {
+      $.ui.log(`applying the agent limits to a model request failed: ${(err as Error).message}`)
+    }
+    if (hard !== null) {
+      yield { kind: 'text', index: 0, text: hard }
+      yield { kind: 'stop', stopReason: 'end_turn', usage: null }
+      return { turnId: e.turnId, index: e.index, answer: hard, toolUses: [], stopReason: 'end_turn', usage: null }
+    }
+    const response = yield* next(e)
+    try {
+      if (count !== null) await count(response.usage)
+    } catch (err) {
+      $.ui.log(`recording an agent's model request failed: ${(err as Error).message}`)
+    }
+    return response
+  })
+
+  // one tool.call hook without a matcher, as the engine allows: a report_result call, then the limits on every other
+  // call of a pipeline agent
+  on('tool.call', async ($, e, next) => {
+    // a pipeline agent's result; refused for any other caller, written only while its ticket is at that agent's stage
+    if (e.tool === `mcp__${$.plugin.name}__${REPORT_TOOL.name}`) {
+      const agent = (await $.agent.list()).find(a => a.id === e.agentId)
+      try {
+        const root = await $.session.root()
+        const run: Run = (argv, init) => $.process.run(argv, { cwd: root, ...init })
+        const r = await onReport(run, LOOP_PLUGIN, agent, e as Record<string, unknown>)
+        $.ui.log(r.log)
+        if (r.deny !== undefined) return { deny: r.deny }
+        return { result: r.changed ? 'Recorded.' : 'Not recorded: the ticket is no longer at your stage.' }
+      } catch (err) {
+        $.ui.log(`report_result failed: ${(err as Error).message}`)
+        return { deny: (err as Error).message }
+      }
+    }
+
+    // the limits: from 80% of a limit a nudge rides on the result, once per limit; at the limit the call is refused.
+    // They fail open: an error is logged and the call runs
+    const agentId = e.agentId
+    if (agentId === undefined) return next(e)
+    let v: Verdict = null
+    try {
+      const who = agentOf((await $.agent.list()).find(a => a.id === agentId), LOOP_PLUGIN)
+      const root = await $.session.root()
+      const run: Run = (argv, init) => $.process.run(argv, { cwd: root, ...init })
+      // the run's first request opens it: none means the turn.step hook failed, and the call is not held on that
+      const r = who === null ? undefined : await readRun(run, DB, agentId)
+      if (who !== null && r !== undefined) {
+        v = decide(r, await $.clock.now(), limitsFrom(await readRouting(run)))
+        // claimed before the call runs: parallel calls of one step run their hooks concurrently, and only one carries it
+        if (v?.kind === 'nudge') {
+          if ((await markTold(run, DB, agentId, { kind: 'nudge', limit: v.limit })).length === 0) v = null
+          else $.ui.log(`${who.ticket} ${who.role} nudged at 80% of its ${v.limit} limit`)
+        } else if (v !== null && r.soft_stop_at === null) {
+          await markTold(run, DB, agentId, { kind: 'soft', limit: v.limit })
+          $.ui.log(`${who.ticket} ${who.role} soft-stopped at its ${v.limit} limit`)
+        }
+      }
+    } catch (err) {
+      $.ui.log(`applying the agent limits to a tool call failed: ${(err as Error).message}`)
+      v = null
+    }
+    if (v === null) return next(e)
+    if (v.kind !== 'nudge') return { deny: softStopText(v.limit) }
+    const done = await next(e)
+    if (done.deny !== undefined) return done
+    return { ...done, context: [...(done.context ?? []), nudgeText(v.limit)] }
   })
 
   // a pipeline agent's Bash command that mentions pipeline.db is refused: its result goes through report_result
