@@ -62,8 +62,9 @@ flowchart TD
 ```
 
 The loop never waits on a human: anything it cannot decide is set to `needs_human` with its question, and the
-pass moves on. An `in_progress` ticket whose implementer, verifier or fixer is no longer running also goes to
-`needs_human`, and so does one whose owning session has stopped: several sessions may load the pipeline on one
+pass moves on. An `in_progress` ticket whose verifier or fixer is no longer running has it started again once; one
+whose implementer is gone, or whose verifier or fixer is gone a second time, goes to `needs_human`, and so does one
+whose owning session has stopped: several sessions may load the pipeline on one
 project, and each moves on only the tickets it claimed. Agent review is one round only; the `Draft: ` prefix comes off the PR title when it is done.
 A ticket blocked by another in the tracker is held until its blocker is done; marking merged PRs done before
 sync releases it in the same pass, so it is built on its blocker's merged code. `/pipeline:pipeline-status`

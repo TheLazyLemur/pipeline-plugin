@@ -90,7 +90,7 @@ export const sync = async (run: Run, db: string, tracker: string) => {
   }
   // a ticket that became blocked leaves until its blockers are done, unless work on it has started
   for (const ticket of blocked) statements.push(`delete from tickets where ticket_id = ${lit(ticket)} and status in ('new', 'ready');`)
-  for (const t of done) statements.push(`update tickets set status = 'done' where ticket_id = ${lit(id(DONE, t))};`)
+  for (const t of done) statements.push(`update tickets set status = 'done', restarts = 0 where ticket_id = ${lit(id(DONE, t))};`)
   statements.push('commit;')
   await sql(run, db, statements.join('\n'))
 }

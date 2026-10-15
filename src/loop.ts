@@ -41,7 +41,7 @@ export const start = async (d: Pick<Deps, 'run' | 'spawn' | 'plugin'>, ticketId:
     })
     if (s.deny === undefined) continue
     const question = `The ${role} could not start: ${s.deny}. The PR is still a draft: finish its review, then set the ticket pr_open.`
-    await sql(d.run, DB, `update tickets set status = 'needs_human', question = ${lit(question)} where ticket_id = ${lit(ticketId)} and status = 'in_progress'`)
+    await sql(d.run, DB, `update tickets set status = 'needs_human', restarts = 0, question = ${lit(question)} where ticket_id = ${lit(ticketId)} and status = 'in_progress'`)
     return `${ticketId} needs you: its ${role} could not start: ${s.deny}`
   }
   await sql(d.run, DB, `update tickets set started = 1 where ticket_id = ${lit(ticketId)}`)
@@ -53,7 +53,7 @@ const read = async (run: Run, name: string) => {
   return r.exitCode === 0 ? r.stdout : null
 }
 
-/** One pass: mark merged PRs done, sync, triage every new ticket, move each in_progress ticket this session owns on, send those of a stopped session to a human, claim and spawn the implementer for the next ready one if none is in progress. Resolves what to log. */
+/** One pass: mark merged PRs done and sync (a tracker failure is logged and the pass goes on), triage every new ticket, move each in_progress ticket this session owns on, send those of a stopped session to a human, claim and spawn the implementer for the next ready one if none is in progress. Resolves what to log. */
 export const pass = async (d: Deps): Promise<string[]> => {
   const [tracker, readiness, rubric, routing] = await Promise.all([
     read(d.run, 'tracker'),
@@ -70,10 +70,14 @@ export const pass = async (d: Deps): Promise<string[]> => {
   const live = (await d.agents()).filter(a => LIVE.includes(a.status))
 
   // 1. a merged PR marks its ticket done before sync, so dependents it was holding are released in this pass
-  for (const id of await closeMerged(d.run, DB, tracker)) log.push(`${id} is done: its PR merged`)
-
   // 2. sync, so what it adds is triaged in this pass
-  await sync(d.run, DB, tracker)
+  // a tracker that fails or times out (a laptop waking from sleep) must not hold up the tickets already in the table
+  try {
+    for (const id of await closeMerged(d.run, DB, tracker)) log.push(`${id} is done: its PR merged`)
+    await sync(d.run, DB, tracker)
+  } catch (err) {
+    log.push(`tracker unreachable: ${(err as Error).message}`)
+  }
 
   // 3. triage; a failed ticket stays new and is retried next pass
   const fresh = (await sql(d.run, DB, `select ticket_id, title, url, body from tickets where status = 'new' order by rowid`)) as Ticket[]
@@ -90,8 +94,9 @@ export const pass = async (d: Deps): Promise<string[]> => {
   // counts toward the one-at-a-time limit while its owner is seen, and goes to a human once it is not.
   // A stage with no agent of its ticket still live moves on: a stage report_result entered gets its agents started
   // here, since only this plugin's spawns are heard by pipeline-agents (docs/adr/0001); finished reviewers hand over
-  // to the verifier; any other agent gone with no result reported (crash, restart) leaves its ticket to a human
-  const busy = (await sql(d.run, DB, `select ticket_id, stage, started, owner, ${STALE} as stale from tickets where status = 'in_progress' order by rowid`)) as (Ticket & { stale: 0 | 1 })[]
+  // to the verifier; a verifier or fixer gone with no result reported (crash, sleep) is started again once; any other
+  // agent gone, or one gone a second time, leaves its ticket to a human: an implementer may have pushed a branch
+  const busy = (await sql(d.run, DB, `select ticket_id, stage, started, restarts, owner, ${STALE} as stale from tickets where status = 'in_progress' order by rowid`)) as (Ticket & { stale: 0 | 1 })[]
   const working = new Set(live.map(a => agentOf(a, d.plugin)?.ticket))
   let waiting = 0
   for (const t of busy) {
@@ -100,7 +105,7 @@ export const pass = async (d: Deps): Promise<string[]> => {
     if (t.owner !== d.session && t.stale === 0) waiting++
     else if (t.owner !== d.session) {
       const question = `The session that owned this ticket (${t.owner}) stopped, so whatever agent it was running is gone. Check the branch and any PR, then send the ticket back to new or set it pr_open.`
-      const moved = await sql(d.run, DB, `update tickets set status = 'needs_human', question = ${lit(question)} where ticket_id = ${lit(t.ticket_id)} and status = 'in_progress' and owner = ${lit(t.owner)} and ${STALE} returning ticket_id`)
+      const moved = await sql(d.run, DB, `update tickets set status = 'needs_human', restarts = 0, question = ${lit(question)} where ticket_id = ${lit(t.ticket_id)} and status = 'in_progress' and owner = ${lit(t.owner)} and ${STALE} returning ticket_id`)
       if (moved.length > 0) log.push(`${t.ticket_id} needs you: its owning session stopped`)
     } else if (working.has(t.ticket_id)) waiting++
     else if (t.started === 0 && t.stage !== null && t.stage !== 'implement') {
@@ -110,13 +115,17 @@ export const pass = async (d: Deps): Promise<string[]> => {
       waiting++
       const moved = await sql(d.run, DB, `update tickets set stage = 'verify', started = 0 where ticket_id = ${lit(t.ticket_id)} and status = 'in_progress' and stage = 'review' returning ticket_id`)
       if (moved.length > 0) log.push(await start(d, t.ticket_id, 'verify'))
+    } else if ((t.stage === 'verify' || t.stage === 'fix') && t.restarts === 0) {
+      waiting++
+      const moved = await sql(d.run, DB, `update tickets set started = 0, restarts = 1 where ticket_id = ${lit(t.ticket_id)} and status = 'in_progress' and stage = ${lit(t.stage)} and restarts = 0 returning ticket_id`)
+      if (moved.length > 0) log.push(`${t.ticket_id} ${STARTS[t.stage].join(', ')} vanished; restarting it once`, await start(d, t.ticket_id, t.stage))
     } else {
       const who = t.stage === 'verify' ? 'verifier' : t.stage === 'fix' ? 'fixer' : 'implementer'
       const question =
         who === 'implementer'
           ? 'The implementer stopped without recording a PR or a question. Check its branch, then send the ticket back to new.'
           : `The ${who} stopped without recording a result. The PR is still a draft: check it, then set the ticket pr_open or send it back to new.`
-      await sql(d.run, DB, `update tickets set status = 'needs_human', question = ${lit(question)} where ticket_id = ${lit(t.ticket_id)} and status = 'in_progress'`)
+      await sql(d.run, DB, `update tickets set status = 'needs_human', restarts = 0, question = ${lit(question)} where ticket_id = ${lit(t.ticket_id)} and status = 'in_progress'`)
       log.push(`${t.ticket_id} needs you: its ${who} stopped without a result`)
     }
   }
@@ -145,7 +154,7 @@ export const pass = async (d: Deps): Promise<string[]> => {
     }`,
   })
   if (s.deny !== undefined) {
-    await sql(d.run, DB, `update tickets set status = 'ready', owner = null, owner_seen = null where ticket_id = ${lit(next.ticket_id)} and status = 'in_progress'`)
+    await sql(d.run, DB, `update tickets set status = 'ready', owner = null, owner_seen = null, restarts = 0 where ticket_id = ${lit(next.ticket_id)} and status = 'in_progress'`)
     log.push(`implementer for ${next.ticket_id} not started: ${s.deny}`)
   } else log.push(`${next.model} is implementing ${next.ticket_id}`)
   return log

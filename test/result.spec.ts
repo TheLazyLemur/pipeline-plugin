@@ -164,16 +164,17 @@ test('an implementer of a ticket below the review threshold reporting a PR opens
 
 test('a verifier reporting 0 findings opens the PR', async () => {
   // given
-  // ... a ticket at stage verify with its draft PR
-  const db = await withTicket('in_progress', `stage = 'verify', difficulty = 4, pr_url = 'https://github.com/o/r/pull/7'`)
+  // ... a ticket at stage verify with its draft PR, whose verifier the loop restarted once
+  const db = await withTicket('in_progress', `stage = 'verify', restarts = 1, difficulty = 4, pr_url = 'https://github.com/o/r/pull/7'`)
 
   // when
   // ... its verifier reports no findings
   const r = await report(run, db, 'pipeline', verifier, { status: 'reviewed', findings: 0 }, 3)
 
   // then
-  // ... the ticket is pr_open with its url kept, and no fixer is to be started
+  // ... the ticket is pr_open with its url kept and restarts back at 0, and no fixer is to be started
   assert.deepEqual(await staged(db), [{ status: 'pr_open', stage: 'verify', pr_url: 'https://github.com/o/r/pull/7' }])
+  assert.deepEqual(await sql(run, db, `select restarts from tickets`), [{ restarts: 0 }])
   assert.equal(r?.next, undefined)
 })
 
@@ -194,31 +195,33 @@ test('a verifier reporting findings moves the ticket to fix', async () => {
 
 test('a fixer reporting the PR opens it', async () => {
   // given
-  // ... a ticket at stage fix
-  const db = await withTicket('in_progress', `stage = 'fix', difficulty = 4, pr_url = 'https://github.com/o/r/pull/7'`)
+  // ... a ticket at stage fix, whose fixer the loop restarted once
+  const db = await withTicket('in_progress', `stage = 'fix', restarts = 1, difficulty = 4, pr_url = 'https://github.com/o/r/pull/7'`)
 
   // when
   // ... its fixer reports the PR
   const r = await report(run, db, 'pipeline', fixer, { status: 'pr_open', pr_url: 'https://github.com/o/r/pull/7' }, 3)
 
   // then
-  // ... the ticket is pr_open, not sent back to review
+  // ... the ticket is pr_open with restarts back at 0, not sent back to review
   assert.deepEqual(await staged(db), [{ status: 'pr_open', stage: 'fix', pr_url: 'https://github.com/o/r/pull/7' }])
+  assert.deepEqual(await sql(run, db, `select restarts from tickets`), [{ restarts: 0 }])
   assert.equal(r?.next, undefined)
 })
 
 test('a blocked fixer sends the ticket to needs_human with its question', async () => {
   // given
-  // ... a ticket at stage fix
-  const db = await withTicket('in_progress', `stage = 'fix', difficulty = 4, pr_url = 'https://github.com/o/r/pull/7'`)
+  // ... a ticket at stage fix, whose fixer the loop restarted once
+  const db = await withTicket('in_progress', `stage = 'fix', restarts = 1, difficulty = 4, pr_url = 'https://github.com/o/r/pull/7'`)
 
   // when
   // ... its fixer reports blocked
   await report(run, db, 'pipeline', fixer, { status: 'blocked', question: 'Which finding wins?' }, 3)
 
   // then
-  // ... the ticket waits on a human with the question
+  // ... the ticket waits on a human with the question and restarts back at 0
   assert.deepEqual(await row(db), [{ status: 'needs_human', pr_url: 'https://github.com/o/r/pull/7', question: 'Which finding wins?' }])
+  assert.deepEqual(await sql(run, db, `select restarts from tickets`), [{ restarts: 0 }])
 })
 
 test('a report from an agent whose stage the ticket has left is not recorded', async () => {

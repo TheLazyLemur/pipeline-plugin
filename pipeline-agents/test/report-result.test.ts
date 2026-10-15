@@ -53,7 +53,7 @@ const pipelineDb = (on: On) => {
     expect(e.argv.slice(0, 6)).toEqual(['sqlite3', '-bail', '-json', '-cmd', '.timeout 5000', DB])
     const statement = e.argv.at(-1) ?? ''
     if (statement === "select difficulty, stage from tickets where ticket_id = 'T-1'") return out(0, JSON.stringify([row]))
-    const set = statement.match(/^update tickets set status = '(\w+)', pr_url = '([^']+)' where ticket_id = 'T-1' and status = 'in_progress' and coalesce\(stage, 'implement'\) = 'implement' returning ticket_id$/)
+    const set = statement.match(/^update tickets set status = '(\w+)', restarts = 0, pr_url = '([^']+)' where ticket_id = 'T-1' and status = 'in_progress' and coalesce\(stage, 'implement'\) = 'implement' returning ticket_id$/)
     expect(set, `an unexpected statement: ${statement}`).not.toBeNull()
     Object.assign(row, { status: set?.[1], pr_url: set?.[2] })
     return out(0, JSON.stringify([{ ticket_id: 'T-1' }]))

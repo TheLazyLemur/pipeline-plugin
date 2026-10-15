@@ -123,7 +123,7 @@ test('a PR URL reaches the merge check as literal text', async () => {
 })
 
 for (const missing of [MERGED, MARK_DONE]) {
-  test(`a tracker.md without "## ${missing}" fails the pass`, async () => {
+  test(`a tracker.md without "## ${missing}" is logged as the tracker unreachable`, async () => {
     // given
     // ... a tracker.md written before that section was required, and no PR open
     const { run, root } = await freshProject()
@@ -131,11 +131,42 @@ for (const missing of [MERGED, MARK_DONE]) {
 
     // when
     // ... a pass runs
-    const passed = pass(deps(run, []).d)
+    const log = await pass(deps(run, []).d)
 
     // then
-    // ... it fails naming the section and the fix
-    await assert.rejects(passed, new RegExp(`no command under "## ${missing}"; run /tracker-setup`))
+    // ... it logs the section and the fix
+    assert.match(log.join('\n'), new RegExp(`tracker unreachable: tracker.md has no command under "## ${missing}"; run /tracker-setup`))
+  })
+}
+
+/** A run whose tracker commands (run with sh) exit 1, as an unreachable tracker does. */
+const failing = (run: Run): Run => async (argv, init) => (argv[0] === 'sh' ? { exitCode: 1, stdout: '', stderr: 'connection refused', isStdoutTruncated: false, isStderrTruncated: false } : run(argv, init))
+/** A run whose tracker commands reject, as `$.process.run` does on its timeout. */
+const timingOut = (run: Run): Run => async (argv, init) => {
+  if (argv[0] === 'sh') throw new Error('$.process.run(sh) aborted: still running after 30000ms')
+  return run(argv, init)
+}
+
+for (const [how, broken, reason] of [
+  ['fails', failing, /tracker unreachable: "List the tickets waiting to be worked" exited 1: connection refused/],
+  ['times out', timingOut, /tracker unreachable: \$\.process\.run\(sh\) aborted: still running after 30000ms/],
+] as const) {
+  test(`a tracker command that ${how} is logged and the stage step still spawns the verifier`, async () => {
+    // given
+    // ... a ticket at stage verify whose verifier is still to be started, and a tracker that ${how}
+    const { run, db } = await freshProject()
+    await sql(run, db, `insert into tickets (ticket_id, title, status, stage, started, model, difficulty, pr_url) values ('T-1', 'one', 'in_progress', 'verify', 0, 'sonnet', 3, 'https://git/pr/1')`)
+    const { d, spawned } = deps(broken(run), [])
+
+    // when
+    // ... a pass runs
+    const log = await pass(d)
+
+    // then
+    // ... the pass logs the tracker unreachable and still starts the verifier
+    assert.match(log.join('\n'), reason)
+    assert.deepEqual(spawned.map(s => s.description), ['pipeline T-1 verifier'])
+    assert.deepEqual(await sql(run, db, `select stage, started from tickets`), [{ stage: 'verify', started: 1 }])
   })
 }
 
@@ -202,22 +233,24 @@ test('nothing is spawned while an implementer is running', async () => {
   assert.deepEqual(await sql(run, db, `select status from tickets where ticket_id = 'T-2'`), [{ status: 'ready' }])
 })
 
-test('a ticket whose implementer is gone without a result goes to needs_human', async () => {
+test('a ticket whose implementer is gone without a result goes to needs_human, not restarted', async () => {
   // given
-  // ... a ticket in progress and no implementer live for it
+  // ... a ticket at stage implement that was never restarted, and no implementer live for it
   const { run, db } = await freshProject()
-  await sql(run, db, `insert into tickets (ticket_id, title, status, model) values ('T-1', 'one', 'in_progress', 'opus')`)
-  const { d } = deps(run, [])
+  await sql(run, db, `insert into tickets (ticket_id, title, status, stage, model) values ('T-1', 'one', 'in_progress', 'implement', 'opus')`)
+  const { d, spawned } = deps(run, [])
 
   // when
   // ... a pass runs
   await pass(d)
 
   // then
-  // ... it waits on a human, with a question saying why
-  const [row] = await sql(run, db, `select status, question from tickets`)
+  // ... it waits on a human, with a question saying why, and nothing is spawned
+  const [row] = await sql(run, db, `select status, restarts, question from tickets`)
   assert.equal(row?.status, 'needs_human')
+  assert.equal(row?.restarts, 0)
   assert.match(String(row?.question), /stopped without recording/)
+  assert.deepEqual(spawned, [])
 })
 
 test('a refused spawn puts the ticket back to ready, unowned', async () => {
@@ -335,11 +368,34 @@ test('no implementer is spawned while a ticket is being verified', async () => {
   assert.deepEqual(await sql(run, db, `select status from tickets where ticket_id = 'T-2'`), [{ status: 'ready' }])
 })
 
-test('a ticket whose verifier is gone without a result goes to needs_human', async () => {
+for (const [stage, role, model] of [
+  ['verify', 'verifier', 'opus'],
+  ['fix', 'fixer', 'sonnet'],
+] as const) {
+  test(`a ticket whose ${role} is gone without a result for the first time has it started again`, async () => {
+    // given
+    // ... a sonnet ticket at stage ${stage}, never restarted, and no agent live for it
+    const { run, db } = await freshProject()
+    await sql(run, db, `insert into tickets (ticket_id, title, status, stage, model, difficulty, pr_url) values ('T-1', 'one', 'in_progress', ${lit(stage)}, 'sonnet', 3, 'https://git/pr/1')`)
+    const { d, spawned } = deps(run, [])
+
+    // when
+    // ... a pass runs
+    const log = await pass(d)
+
+    // then
+    // ... the ${role} is spawned again, the ticket is marked restarted, and the pass says so
+    assert.deepEqual(spawned.map(s => [s.description, s.model]), [[`pipeline T-1 ${role}`, model]])
+    assert.deepEqual(await sql(run, db, `select status, stage, started, restarts from tickets`), [{ status: 'in_progress', stage, started: 1, restarts: 1 }])
+    assert.match(log.join('\n'), new RegExp(`T-1 ${role} vanished; restarting it once`))
+  })
+}
+
+test('a ticket whose verifier is gone without a result a second time goes to needs_human', async () => {
   // given
-  // ... a ticket at stage verify and no agent live for it
+  // ... a ticket at stage verify already restarted once, and no agent live for it
   const { run, db } = await freshProject()
-  await sql(run, db, `insert into tickets (ticket_id, title, status, stage, model, difficulty, pr_url) values ('T-1', 'one', 'in_progress', 'verify', 'opus', 3, 'https://git/pr/1')`)
+  await sql(run, db, `insert into tickets (ticket_id, title, status, stage, restarts, model, difficulty, pr_url) values ('T-1', 'one', 'in_progress', 'verify', 1, 'opus', 3, 'https://git/pr/1')`)
   const { d, spawned } = deps(run, [])
 
   // when
@@ -347,9 +403,10 @@ test('a ticket whose verifier is gone without a result goes to needs_human', asy
   const log = await pass(d)
 
   // then
-  // ... it waits on a human, nothing is respawned, and the question names the verifier
-  const [row] = await sql(run, db, `select status, question from tickets`)
+  // ... it waits on a human with restarts back at 0, nothing is respawned, and the question names the verifier
+  const [row] = await sql(run, db, `select status, restarts, question from tickets`)
   assert.equal(row?.status, 'needs_human')
+  assert.equal(row?.restarts, 0)
   assert.match(String(row?.question), /The verifier stopped without recording a result/)
   assert.deepEqual(spawned, [])
   assert.match(log.join('\n'), /T-1 needs you: its verifier stopped/)
@@ -369,7 +426,7 @@ test('a database made before stages gains the column on the first pass and its r
 
   // then
   // ... the columns exist, and the ticket was adopted and handled as an implementer gone without a result
-  assert.deepEqual(await sql(run, db, `select stage, status, owner, owner_seen is not null as seen from tickets`), [{ stage: null, status: 'needs_human', owner: 's1', seen: 1 }])
+  assert.deepEqual(await sql(run, db, `select stage, restarts, status, owner, owner_seen is not null as seen from tickets`), [{ stage: null, restarts: 0, status: 'needs_human', owner: 's1', seen: 1 }])
   assert.match(String((await sql(run, db, `select question from tickets`))[0]?.question), /The implementer stopped/)
 })
 

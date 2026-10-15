@@ -16,7 +16,8 @@ sync, and the instructions its agents follow to talk to the tracker. No adapter 
    - which status to move a ticket to when the implementer starts, when its PR is open, and which mean done.
 3. **Write `.claude/pipeline/tracker.md`.** The pipeline's mod runs five commands itself. Each goes in the
    first fenced code block under its own heading, spelled exactly as below, and is run with `sh -c` from the
-   project root. A tracker.md missing any of them fails every loop pass with "run /tracker-setup".
+   project root. A tracker.md missing any of them stops every loop pass from syncing, logging "tracker unreachable"
+   with "run /tracker-setup".
 
    **Pick the shape.** When the tracker or the PR host is reached through an API (Jira, GitHub, Bitbucket, Linear),
    write one script, `.claude/pipeline/tracker.sh`, with one subcommand per section below: `waiting`, `done`,
@@ -48,7 +49,7 @@ sync, and the instructions its agents follow to talk to the tracker. No adapter 
    releases its dependents in the same pass. Each gets one value as `$1`, passed as an argument and never
    spliced into the command: always quote it as `"$1"`, and never paste it into a query string unchecked.
    - `## Check whether a PR is merged` gets the PR URL as `$1` and prints `{"merged": true}` or
-     `{"merged": false}`; anything else fails the pass. On GitHub:
+     `{"merged": false}`; anything else stops the pass from syncing. On GitHub:
      `gh pr view "$1" --json state --jq '{merged: (.state == "MERGED")}'`. Use the PR host's CLI or API.
    - `## Mark a ticket done` gets the tracker ticket id as `$1` and moves it to the done status, exiting
      non-zero on failure. It must succeed when the ticket is already done (some trackers close on merge).

@@ -31,12 +31,17 @@ One pass of the loop (`src/loop.ts`), in order:
 1. Done: each `pr_open` ticket whose PR has merged is marked done in the tracker and in the table, so sync
    releases its dependents in the same pass.
 2. Sync: pull new and changed tickets into SQLite (`src/sync.ts`, TypeScript).
+   A tracker command that fails or times out in step 1 or 2 is logged as "tracker unreachable: <reason>" and the
+   pass goes on with the tickets already in the table.
 3. Triage every ticket with status new, with the ticket body (`src/triage.ts`). A ticket whose triage fails stays
    new and is retried next pass.
 4. Stages: only the session that claimed an `in_progress` ticket (its `owner`) moves it on, since
    `$.agent.list()` sees that session's agents alone. An owned ticket with no live agent of its own moves on. At
-   stage `review` the reviewers are done, so it goes to `verify` and the verifier is spawned; at any other stage
-   its agent is gone without a result, so it goes to needs_human. Another session's ticket is left alone while
+   stage `review` the reviewers are done, so it goes to `verify` and the verifier is spawned. At `verify` or `fix`
+   its agent is gone without a result: the first time (`restarts` 0) the pass sets `restarts` to 1 and spawns that
+   stage's agent again, logging "<ticket> <role> vanished; restarting it once"; the second time it goes to
+   needs_human. At `implement` it goes to needs_human straight away: the implementer may have pushed a branch or
+   opened a PR. Another session's ticket is left alone while
    its owner has been seen in the last 15 minutes, and goes to needs_human once it has not.
 5. Spawn: if no ticket is in_progress (at any stage, in any session), claim the oldest ready one and spawn its
    implementer at stage `implement`, telling it whether to open the PR as a draft. The claim is one guarded
@@ -48,7 +53,8 @@ One pass of the loop (`src/loop.ts`), in order:
 ### The tracker.md command contract
 The mod runs these tracker.md commands itself. Each is the first fenced block under a heading spelled exactly
 as below, run with `sh -c` from the project root. A tracker.md missing any of them, or a command that exits
-non-zero or prints another shape, fails the whole pass with "run /tracker-setup".
+non-zero, times out or prints another shape, ends the done and sync steps of that pass with "tracker unreachable:
+<reason>" logged; the rest of the pass still runs.
 
 | heading | prints |
 |---|---|
@@ -161,6 +167,7 @@ Holds pipeline status. The tracker owns the ticket itself; SQLite holds our fiel
 | stage | implement, review, verify or fix, while in_progress; null (from before stages) reads as implement |
 | owner | the `$.session.id()` of the session whose pass claimed the ticket; a null one on an in_progress row (from before owners) is adopted by the next pass |
 | owner_seen | when the owner's pass last ran (SQLite `datetime('now')`) |
+| restarts | 1 once the pass restarted the ticket's vanished verifier or fixer; back to 0 when the ticket leaves in_progress |
 | question | what it needs from you, when needs_human |
 | difficulty | 1-5 |
 | confidence | 0-1 |
