@@ -24,7 +24,8 @@ while a command still runs is read as the end of your work.
    draft, put `Draft: ` in front of the title the skill produces, and run `check` on the title without the prefix.
    In the skill's facts file, set `ticket` to the ticket's id and `ticket_url` to its URL. When the tracker has no
    ticket URLs, leave `ticket_url` out: the ticket line is then the bare id, with no link.
-   Push the branch and open the PR, linking the ticket. Link the PR on the tracker, following tracker.md.
+   Push the branch and open the PR, linking the ticket. A draft PR is also a draft on the host (on GitHub:
+   `gh pr create --draft`); any other PR is a normal one. Link the PR on the tracker, following tracker.md.
 6. Remove the worktree.
 7. Finish by calling the `report_result` tool with `status: "pr_open"` and `pr_url`.
 
