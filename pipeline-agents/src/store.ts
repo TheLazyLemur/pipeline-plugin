@@ -65,6 +65,18 @@ create table if not exists turns (
   cache_write_tokens integer not null,
   duration_ms integer not null
 );
+create table if not exists agent_runs (
+  agent_id text primary key,
+  ticket_id text not null,
+  role text not null check (role in ('implementer', 'reviewer-spec', 'reviewer-quality', 'verifier', 'fixer')),
+  started_at integer not null,
+  requests integer not null default 0,
+  context_tokens integer not null default 0,
+  nudged_token integer not null default 0 check (nudged_token in (0, 1)),
+  nudged_time integer not null default 0 check (nudged_time in (0, 1)),
+  soft_stop_at integer,
+  soft_limit text check (soft_limit in ('token', 'time'))
+);
 drop view if exists role_usage;
 create view role_usage as
   select ticket_id, role, group_concat(distinct model) as model, count(*) as turns,

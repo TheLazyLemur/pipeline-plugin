@@ -1,7 +1,9 @@
 import type { Register } from 'claude-code'
 import { LOOP_PLUGIN, agentOf } from '../src/agents.ts'
 import { REPORT_TOOL, dbRefusal, onReport, stop } from '../src/result.ts'
-import { DB, type Run } from '../src/store.ts'
+import { decide, markTold, nudgeText, openRun, readRun, recordRequest, softStopText } from '../src/limits.ts'
+import { limitsFrom, readRouting } from '../src/routing.ts'
+import { DB, type Run, migrate } from '../src/store.ts'
 import { recordTurn } from '../src/usage.ts'
 
 // Every hook that must hear the loop's agents lives here, not in pipeline: a plugin never hears the agents it
@@ -10,24 +12,87 @@ export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     // awaited before next, so the tool is listed by the implementers' first turn
     await $.tool.register(REPORT_TOOL)
-    return next(e)
-  })
-
-  // a pipeline agent's result; refused for any other caller, written only while its ticket is at that agent's stage
-  on('tool.call', async ($, e, next) => {
-    if (e.tool !== `mcp__${$.plugin.name}__${REPORT_TOOL.name}`) return next(e)
-    const agent = (await $.agent.list()).find(a => a.id === e.agentId)
+    // the limits write agent_runs from an agent's first request, which may come before the loop's first pass migrates
     try {
       const root = await $.session.root()
       const run: Run = (argv, init) => $.process.run(argv, { cwd: root, ...init })
-      const r = await onReport(run, LOOP_PLUGIN, agent, e as Record<string, unknown>)
-      $.ui.log(r.log)
-      if (r.deny !== undefined) return { deny: r.deny }
-      return { result: r.changed ? 'Recorded.' : 'Not recorded: the ticket is no longer at your stage.' }
+      if ((await run(['test', '-d', '.claude/pipeline'])).exitCode === 0) await migrate(run, DB)
     } catch (err) {
-      $.ui.log(`report_result failed: ${(err as Error).message}`)
-      return { deny: (err as Error).message }
+      $.ui.log(`migrating the pipeline database failed: ${(err as Error).message}`)
     }
+    return next(e)
+  })
+
+  // the limits, per model request of a pipeline agent: its start and context are recorded, a limit reached is a soft
+  // stop, and once the soft stop's grace is spent the request is answered without being sent, so the agent ends
+  on('turn.step', async function* ($, e, next) {
+    const agentId = e.agentId
+    const who = agentId === undefined ? null : agentOf((await $.agent.list()).find(a => a.id === agentId), LOOP_PLUGIN)
+    if (agentId === undefined || who === null) return yield* next(e)
+    const root = await $.session.root()
+    const run: Run = (argv, init) => $.process.run(argv, { cwd: root, ...init })
+    const now = await $.clock.now()
+    const r = await openRun(run, DB, agentId, who, now)
+    const v = decide(r, now, limitsFrom(await readRouting(run)))
+    if (v?.kind === 'hard') {
+      $.ui.log(`${who.ticket} ${who.role} hard-stopped at its ${v.limit} limit`)
+      const answer = `Stopped: the ${v.limit} limit was reached.`
+      yield { kind: 'text', index: 0, text: answer }
+      yield { kind: 'stop', stopReason: 'end_turn', usage: null }
+      return { turnId: e.turnId, index: e.index, answer, toolUses: [], stopReason: 'end_turn', usage: null }
+    }
+    if (v?.kind === 'soft' && r.soft_stop_at === null) {
+      await markTold(run, DB, agentId, { kind: 'soft', limit: v.limit })
+      $.ui.log(`${who.ticket} ${who.role} soft-stopped at its ${v.limit} limit`)
+    }
+    const response = yield* next(e)
+    await recordRequest(run, DB, agentId, response.usage)
+    return response
+  })
+
+  // one tool.call hook without a matcher, as the engine allows: a report_result call, then the limits on every other
+  // call of a pipeline agent
+  on('tool.call', async ($, e, next) => {
+    // a pipeline agent's result; refused for any other caller, written only while its ticket is at that agent's stage
+    if (e.tool === `mcp__${$.plugin.name}__${REPORT_TOOL.name}`) {
+      const agent = (await $.agent.list()).find(a => a.id === e.agentId)
+      try {
+        const root = await $.session.root()
+        const run: Run = (argv, init) => $.process.run(argv, { cwd: root, ...init })
+        const r = await onReport(run, LOOP_PLUGIN, agent, e as Record<string, unknown>)
+        $.ui.log(r.log)
+        if (r.deny !== undefined) return { deny: r.deny }
+        return { result: r.changed ? 'Recorded.' : 'Not recorded: the ticket is no longer at your stage.' }
+      } catch (err) {
+        $.ui.log(`report_result failed: ${(err as Error).message}`)
+        return { deny: (err as Error).message }
+      }
+    }
+
+    // the limits: from 80% of a limit a nudge rides on the result, once per limit; at the limit the call is refused
+    const agentId = e.agentId
+    if (agentId === undefined) return next(e)
+    const who = agentOf((await $.agent.list()).find(a => a.id === agentId), LOOP_PLUGIN)
+    if (who === null) return next(e)
+    const root = await $.session.root()
+    const run: Run = (argv, init) => $.process.run(argv, { cwd: root, ...init })
+    const r = await readRun(run, DB, agentId)
+    // the run's first request opens it: none means the turn.step hook failed, and the call is not held on that
+    if (r === undefined) return next(e)
+    const v = decide(r, await $.clock.now(), limitsFrom(await readRouting(run)))
+    if (v === null) return next(e)
+    if (v.kind !== 'nudge') {
+      if (r.soft_stop_at === null) {
+        await markTold(run, DB, agentId, { kind: 'soft', limit: v.limit })
+        $.ui.log(`${who.ticket} ${who.role} soft-stopped at its ${v.limit} limit`)
+      }
+      return { deny: softStopText(v.limit) }
+    }
+    const done = await next(e)
+    if (done.deny !== undefined) return done
+    await markTold(run, DB, agentId, { kind: 'nudge', limit: v.limit })
+    $.ui.log(`${who.ticket} ${who.role} nudged at 80% of its ${v.limit} limit`)
+    return { ...done, context: [...(done.context ?? []), nudgeText(v.limit)] }
   })
 
   // a pipeline agent's Bash command that mentions pipeline.db is refused: its result goes through report_result

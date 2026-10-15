@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { AgentInfo } from 'claude-code'
+import { markTold, openRun } from '../pipeline-agents/src/limits.ts'
 import { dbRefusal, report, stop } from '../pipeline-agents/src/result.ts'
 import { sql } from '../pipeline-agents/src/store.ts'
 import { freshDb, run } from './helpers.ts'
 
-const implementer = { description: 'pipeline T-1', status: 'running', spawnedBy: 'pipeline' } as AgentInfo
+const implementer = { id: 'a1', description: 'pipeline T-1', status: 'running', spawnedBy: 'pipeline' } as AgentInfo
 
 const verifier = { ...implementer, description: 'pipeline T-1 verifier' } as AgentInfo
 const fixer = { ...implementer, description: 'pipeline T-1 fixer' } as AgentInfo
@@ -128,6 +129,48 @@ test('an implementer that reported may stop', async () => {
   // then
   // ... it is neither blocked nor logged
   assert.deepEqual(s, {})
+})
+
+/** Agent a1's run on T-1 as `role`, soft-stopped at its token limit and past the two requests of grace. */
+const hardStopped = async (db: string, role: 'implementer' | 'reviewer-quality') => {
+  await openRun(run, db, 'a1', { ticket: 'T-1', role }, 0)
+  await markTold(run, db, 'a1', { kind: 'soft', limit: 'token' })
+  await sql(run, db, `update agent_runs set requests = soft_stop_at + 2`)
+}
+
+test('an implementer hard-stopped at a limit is not blocked: its ticket goes to needs_human naming the limit', async () => {
+  // given
+  // ... a ticket in progress whose implementer was hard-stopped at its token limit
+  const db = await withTicket('in_progress')
+  await hardStopped(db, 'implementer')
+
+  // when
+  // ... the implementer stops
+  const s = await stop(run, db, 'pipeline', implementer, false)
+
+  // then
+  // ... it is not blocked, and the ticket goes to a human with the limit named
+  assert.deepEqual(s, { log: 'T-1 needs you: its implementer was stopped at its token limit' })
+  const [r] = await row(db)
+  assert.equal(r?.status, 'needs_human')
+  assert.match(String(r?.question), /reached its token limit \(Agent token limit in routing\.md\)/)
+})
+
+test('a reviewer hard-stopped at a limit sends its ticket to needs_human too', async () => {
+  // given
+  // ... a ticket at stage review whose quality reviewer was hard-stopped at its token limit
+  const db = await withTicket('in_progress', `stage = 'review', difficulty = 4, pr_url = 'https://github.com/o/r/pull/7'`)
+  await hardStopped(db, 'reviewer-quality')
+  const reviewer = { ...implementer, description: 'pipeline T-1 reviewer-quality' } as AgentInfo
+
+  // when
+  // ... the reviewer stops
+  const s = await stop(run, db, 'pipeline', reviewer, false)
+
+  // then
+  // ... the ticket goes to a human with the limit named
+  assert.deepEqual(s, { log: 'T-1 needs you: its reviewer-quality was stopped at its token limit' })
+  assert.equal((await row(db))[0]?.status, 'needs_human')
 })
 
 const staged = (db: string) => sql(run, db, `select status, stage, pr_url from tickets`)
