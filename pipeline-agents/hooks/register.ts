@@ -2,6 +2,7 @@ import type { Register } from 'claude-code'
 import { LOOP_PLUGIN, agentOf } from '../src/agents.ts'
 import { REPORT_TOOL, dbRefusal, onReport, stop } from '../src/result.ts'
 import { DB, type Run } from '../src/store.ts'
+import { recordTurn } from '../src/usage.ts'
 
 // Every hook that must hear the loop's agents lives here, not in pipeline: a plugin never hears the agents it
 // spawned from its own timer (docs/adr/0001). Agents are recognised as spawned by LOOP_PLUGIN.
@@ -44,6 +45,18 @@ export const register: Register = on => {
     const s = await stop((argv, init) => $.process.run(argv, { cwd: root, ...init }), DB, LOOP_PLUGIN, agent, e.stop_hook_active)
     if (s.log !== undefined) $.ui.log(s.log)
     return s.block === undefined ? done : { ...done, block: s.block }
+  })
+
+  // each finished turn of a pipeline agent or an agent it spawned: its tokens and minutes, per ticket and role, for /pipeline-status
+  on('turn.complete', async ($, e, next) => {
+    if (e.agentId === undefined) return next(e)
+    try {
+      const root = await $.session.root()
+      await recordTurn((argv, init) => $.process.run(argv, { cwd: root, ...init }), DB, LOOP_PLUGIN, await $.agent.list(), e.agentId, e)
+    } catch (err) {
+      $.ui.log(`recording a turn's usage failed: ${(err as Error).message}`)
+    }
+    return next(e)
   })
 
   // the loop's agents run unattended: a call that would prompt is allowed; deny rules and an org ceiling still stand

@@ -52,3 +52,18 @@ test('a database made before the body column gains it, keeping its rows', async 
   await sql(run, db, `update tickets set body = 'desc' where ticket_id = 'T-1'`)
   assert.deepEqual(await sql(run, db, `select ticket_id, title, body from tickets`), [{ ticket_id: 'T-1', title: 'one', body: 'desc' }])
 })
+
+test('a database holding an older usage view gets the current one', async () => {
+  // given
+  // ... a ticket_usage view of an earlier definition
+  const db = join(mkdtempSync(join(tmpdir(), 'pipeline-')), 'pipeline.db')
+  await sql(run, db, `create view ticket_usage as select 1 as old`)
+
+  // when
+  // ... it is migrated
+  await migrate(run, db)
+
+  // then
+  // ... the view reads the turns table, which is empty
+  assert.deepEqual(await sql(run, db, `select * from ticket_usage`), [])
+})

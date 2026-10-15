@@ -72,7 +72,7 @@ A plugin's hooks never run for agents that the same plugin spawned from its own 
 spawned from the loop's timer (`docs/adr/0001`). So the repo ships two plugins. `pipeline` (the repo root) runs the
 loop: the timer, sync, triage, spawning every agent, and the notice filter. `pipeline-agents` (`pipeline-agents/`)
 holds every hook that must hear those agents: `report_result`, the `pipeline.db` guard, the `tool.check` allow and
-the `SubagentStop` guard. It recognises them as agents spawned by `pipeline`. The code both use (the store, agent
+the `SubagentStop` guard and the `turn.complete` hook that records their usage. It recognises them as agents spawned by `pipeline`. The code both use (the store, agent
 identity, results, the review threshold) lives in `pipeline-agents/src/`, since a plugin can import only from inside
 its own folder; `src/` holds the loop's own code. `pipeline` declares `pipeline-agents` under `dependencies`.
 
@@ -145,7 +145,8 @@ cannot be synced, because the mod runs the commands itself.
 Credentials stay in env vars or the tool's own login, never in the file.
 
 ### `/pipeline-status` (skill)
-Shows counts by status, tickets in progress with their stage and open PRs, held tickets and what holds each (a dependency cycle
+Shows counts by status, tickets in progress with their stage and open PRs, what each ticket cost (tokens and
+minutes, in total and per role with its model), held tickets and what holds each (a dependency cycle
 shows as tickets holding each other), then walks you through the needs_human questions and saves each answer.
 
 ### SQLite (`.claude/pipeline/pipeline.db`)
@@ -167,6 +168,13 @@ Holds pipeline status. The tracker owns the ticket itself; SQLite holds our fiel
 | reason | why the score / why not ready |
 | pr_url | |
 | learned | whether /learn has processed the PR |
+
+A `turn.complete` hook in `pipeline-agents` adds one row to the `turns` table per finished turn of a pipeline
+agent, or of an agent one spawned (an Agent call, a fork, found up `parentId`), which counts against that pipeline
+agent: its ticket, role, the model and the input, output, cache read and cache write tokens the event reports, and
+the turn's duration. A turn with no usage (an interrupt, an API error) adds its duration with zero tokens. The views
+`role_usage` (per ticket and role) and `ticket_usage` (per ticket) sum them for `/pipeline-status`. No money
+estimate.
 
 Read and written with the `sqlite3` CLI.
 
