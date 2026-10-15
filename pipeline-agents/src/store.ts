@@ -51,7 +51,28 @@ export const SCHEMA = `create table if not exists tickets (
   reason text,
   pr_url text,
   learned integer not null default 0 check (learned in (0, 1))
-);`
+);
+create table if not exists turns (
+  ticket_id text not null,
+  role text not null check (role in ('implementer', 'reviewer-spec', 'reviewer-quality', 'verifier', 'fixer')),
+  model text,
+  input_tokens integer not null,
+  output_tokens integer not null,
+  cache_read_tokens integer not null,
+  cache_write_tokens integer not null,
+  duration_ms integer not null
+);
+create view if not exists role_usage as
+  select ticket_id, role, group_concat(distinct model) as model, count(*) as turns,
+    sum(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) as tokens,
+    sum(input_tokens) as input_tokens, sum(output_tokens) as output_tokens,
+    sum(cache_read_tokens) as cache_read_tokens, sum(cache_write_tokens) as cache_write_tokens,
+    round(sum(duration_ms) / 60000.0, 1) as minutes
+  from turns group by ticket_id, role;
+create view if not exists ticket_usage as
+  select ticket_id, sum(input_tokens + output_tokens + cache_read_tokens + cache_write_tokens) as tokens,
+    round(sum(duration_ms) / 60000.0, 1) as minutes
+  from turns group by ticket_id;`
 
 /** A SQL literal: strings quoted with `'` doubled, so ticket text cannot break out of the statement. */
 export const lit = (v: string | number | null): string => {
