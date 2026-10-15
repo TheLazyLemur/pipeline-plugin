@@ -22,6 +22,8 @@ export type Ticket = {
   owner: string | null
   /** When the owner's pass last ran, as SQLite `datetime('now')`; stale for 15 minutes, the owner is taken as stopped. */
   owner_seen: string | null
+  /** 1 once the loop restarted this ticket's vanished verifier or fixer; a second vanishing goes to needs_human. Back to 0 when the ticket leaves in_progress. */
+  restarts: 0 | 1
   question: string | null
   difficulty: number | null
   confidence: number | null
@@ -44,6 +46,7 @@ export const SCHEMA = `create table if not exists tickets (
   started integer not null default 1 check (started in (0, 1)),
   owner text,
   owner_seen text,
+  restarts integer not null default 0 check (restarts in (0, 1)),
   question text,
   difficulty integer check (difficulty between 1 and 5),
   confidence real check (confidence between 0 and 1),
@@ -101,6 +104,7 @@ const ADDED: Record<string, string> = {
   started: 'integer not null default 1 check (started in (0, 1))',
   owner: 'text',
   owner_seen: 'text',
+  restarts: 'integer not null default 0 check (restarts in (0, 1))',
 }
 
 /** Applies SCHEMA, and adds the columns a database made before them is missing. */

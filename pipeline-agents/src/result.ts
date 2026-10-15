@@ -56,13 +56,13 @@ const record = async (run: Run, db: string, plugin: string, agent: AgentInfo | u
   if (input.status === 'blocked') {
     const question = text(input.question)
     if (question === null) throw new Error('status blocked needs question')
-    return apply(run, db, id, stage, `status = 'needs_human', question = ${lit(question)}`, 'a question', `${id} needs you: ${question}`)
+    return apply(run, db, id, stage, `status = 'needs_human', restarts = 0, question = ${lit(question)}`, 'a question', `${id} needs you: ${question}`)
   }
 
   if (input.status === 'reviewed') {
     const n = input.findings
     if (!Number.isInteger(n) || (n as number) < 0) throw new Error('status reviewed needs findings, a whole number from 0')
-    if (n === 0) return apply(run, db, id, stage, `status = 'pr_open'`, 'no findings', `${id} passed review: its PR is yours`)
+    if (n === 0) return apply(run, db, id, stage, `status = 'pr_open', restarts = 0`, 'no findings', `${id} passed review: its PR is yours`)
     return apply(run, db, id, stage, `stage = 'fix', started = 0`, `${n} findings`, `${id} has ${n} review findings to fix`, 'fix')
   }
 
@@ -77,7 +77,7 @@ const record = async (run: Run, db: string, plugin: string, agent: AgentInfo | u
         return apply(run, db, id, stage, `stage = 'review', started = 0, pr_url = ${lit(url)}`, 'a draft PR', `${id} has a draft PR for review: ${url}`, 'review')
     }
   }
-  return apply(run, db, id, stage, `status = 'pr_open', pr_url = ${lit(url)}`, 'a PR', `${id} has a PR: ${url}`)
+  return apply(run, db, id, stage, `status = 'pr_open', restarts = 0, pr_url = ${lit(url)}`, 'a PR', `${id} has a PR: ${url}`)
 }
 
 /**
@@ -124,5 +124,5 @@ export const stop = async (run: Run, db: string, plugin: string, agent: AgentInf
   if (open === undefined) return {}
   if (!isContinued) return { block: `Call the ${REPORT_TOOL.name} tool before you stop: status ${SENDS[who.role]?.join(' or ')}, with the field it needs.` }
   const question = `The ${who.role} stopped without calling report_result. Check its branch and PR, then send the ticket back to new.`
-  return (await settle(run, db, who.ticket, stage, `status = 'needs_human', question = ${lit(question)}`)) ? { log: `${who.ticket} needs you: its ${who.role} stopped without reporting` } : {}
+  return (await settle(run, db, who.ticket, stage, `status = 'needs_human', restarts = 0, question = ${lit(question)}`)) ? { log: `${who.ticket} needs you: its ${who.role} stopped without reporting` } : {}
 }
