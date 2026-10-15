@@ -47,7 +47,7 @@ in running sessions after a hot reload, with no re-setup.
 ## Implementation Decisions
 
 - **Review threshold:** routing.md gains the difficulty at and above which a ticket is reviewed (default 3). Triage already reads routing.md; the loop reads the threshold from the same file.
-- **Draft prefix:** the mod tells the implementer in its prompt whether to open the PR with the title prefix `Draft: ` (difficulty at or above the threshold) or without it.
+- **Draft prefix:** the mod tells the implementer in its prompt whether to open the PR as a draft on the host (`gh pr create --draft`) with the title prefix `Draft: ` (difficulty at or above the threshold), or as a normal PR without it.
 - **New `stage` column** on tickets: `implement`, `review`, `verify` or `fix`; status stays `in_progress` throughout. `migrate()` adds it when missing, so a running session gains it on the next pass after a pull. A null stage reads as `implement`.
 - **Stage transitions**, driven each pass from `stage` plus the live pipeline agents, and from `report_result` (ticket 8):
   - implementer reports a PR, difficulty at or above the threshold → stage `review`; spawn both reviewers.
@@ -61,11 +61,11 @@ in running sessions after a hot reload, with no re-setup.
 - **Models:** reviewers and verifier run one tier above the ticket's routed model (sonnet → opus, opus → fable, fable → fable). The fixer runs on the routed model.
 - **Agent files, one per role:** `reviewer-spec`, `reviewer-quality`, `verifier`, `fixer`. The model is passed at spawn time.
 - **Reviewers** are read-only: they read the ticket, any spec it references, and the PR diff and files at the PR's commit, with no worktree. Each posts its findings as one ticket comment.
-- **Verifier** checks each finding against the code, drops false ones, merges duplicates, posts the checked list as a ticket comment and a PR comment, and reports the count through `report_result`. With 0 findings it removes the `Draft: ` prefix from the PR title.
-- **Fixer** checks out the PR's existing branch in a worktree, addresses the checked findings, pushes to the same PR, comments on the PR what it fixed and why not for the rest, removes the `Draft: ` prefix, and reports through `report_result`.
+- **Verifier** checks each finding against the code, drops false ones, merges duplicates, posts the checked list as a ticket comment and a PR comment, and reports the count through `report_result`. With 0 findings it marks the PR ready on the host (`gh pr ready`) and removes the `Draft: ` prefix from the PR title.
+- **Fixer** checks out the PR's existing branch in a worktree, addresses the checked findings, pushes to the same PR, comments on the PR what it fixed and why not for the rest, marks the PR ready on the host, removes the `Draft: ` prefix, and reports through `report_result`.
 - **Agent descriptions** follow the existing `pipeline <ticket_id>` tag pattern, with the role distinguishable, so that the notification filter, the permission hook and the live-agent checks cover the new agents.
 - **One ticket at a time:** a ticket in any stage counts as in progress, so no new implementer is spawned until it reaches `pr_open` or `needs_human`.
-- **No tracker.md changes:** the draft flag is a title prefix that agents add and remove; no new required section.
+- **No tracker.md changes:** the draft state is the host's draft flag plus a title prefix, which agents set and clear through the host's CLI; no new required section.
 - **/pipeline-status** shows the stage beside `in_progress`.
 
 ## Testing Decisions
@@ -89,7 +89,7 @@ in running sessions after a hot reload, with no re-setup.
 
 - A second review round.
 - A wider fan-out of reviewers (the user does that at PR review).
-- Host draft flags (`gh pr create --draft`, `gh pr ready`) and any tracker.md command for marking ready.
+- A tracker.md command for marking a PR ready: agents use the host's CLI, like the title edit.
 - Running review or fix alongside the next ticket's implementer.
 - Reviewing tickets already in flight when this lands.
 

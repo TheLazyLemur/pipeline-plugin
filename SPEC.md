@@ -110,17 +110,18 @@ using.
 
 ### Agent review (difficulty at or above the review threshold)
 Design: `docs/specs/agent-review.md`. The threshold is routing.md's `Review threshold: <n>` line (3 when the line is
-missing). Such a ticket's implementer opens its PR with a `Draft: ` title prefix. Then, all at status
+missing). Such a ticket's implementer opens its PR as a draft on the host (on GitHub: `gh pr create --draft`) with a `Draft: ` title prefix. Then, all at status
 `in_progress`, the `stage` column moves `implement` → `review` → `verify` → (`fix`) and each stage's agents run:
 
 - `reviewer-spec` and `reviewer-quality`, read-only, on the model one tier above the routed one (sonnet → opus,
   opus → fable, fable → fable): each reads the ticket, any spec it references and the PR at its head commit, and
   posts its findings as one ticket comment.
 - `verifier`, on the same tier: checks each finding against the code, drops false ones, merges duplicates, posts
-  the checked list under the heading `Checked review findings` on the ticket and the PR, removes the `Draft: `
-  prefix when none are left, and reports the count.
+  the checked list under the heading `Checked review findings` on the ticket and the PR, marks the PR ready
+  on the host (on GitHub: `gh pr ready`) and removes the `Draft: ` prefix when none are left, and reports the count.
 - `fixer`, on the routed model: addresses the checked findings on the same branch and PR, comments on the PR what
-  it fixed and why not the rest under the heading `Fixer notes`, removes the `Draft: ` prefix and reports.
+  it fixed and why not the rest under the heading `Fixer notes`, marks the PR ready on the host, removes the
+  `Draft: ` prefix and reports.
 
 One round only. Every stage is read from the table and the live agents each pass, so a reload or restart picks up
 where it was. An agent that cannot be spawned sends the ticket to needs_human with the PR still a draft.
@@ -197,7 +198,7 @@ Its `Review threshold: <n>` line is read by the mod: the difficulty at and above
 
 ### Implementers (`agents/implementer-sonnet.md`, `-opus.md`, `-fable.md`)
 Spawned by the loop for the routed model. Each reads the ticket, works in its own worktree, implements it, runs the
-tests, opens its own PR and links it on the tracker using tracker.md. It finishes by calling `report_result`, described above. Its prompt says whether to open the PR with the `Draft: `
+tests, opens its own PR and links it on the tracker using tracker.md. It finishes by calling `report_result`, described above. Its prompt says whether to open the PR as a draft on the host with the `Draft: `
 title prefix.
 
 ### Review agents (`agents/reviewer-spec.md`, `reviewer-quality.md`, `verifier.md`, `fixer.md`)

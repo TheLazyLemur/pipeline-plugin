@@ -34,13 +34,13 @@ while a command still runs is read as the end of your work.
 7. Comment on the PR, starting with the line `Fixer notes`, one numbered line per checked finding, using the
    finding's number from the checked list: `<n>. fixed: <what you changed>` or `<n>. not fixed: <why>` (on GitHub:
    `gh pr comment <pr url> --body-file <file>`). /learn reads this heading and these lines, so keep them exact.
-8. Remove the `Draft: ` prefix from the PR's title (on GitHub:
-   `gh pr edit <pr url> --title "<the title without the prefix>"`).
+8. Mark the PR ready for review on the host (on GitHub: `gh pr ready <pr url>`) and remove the `Draft: ` prefix
+   from its title (on GitHub: `gh pr edit <pr url> --title "<the title without the prefix>"`).
 9. Remove the worktree.
 10. Finish by calling the `report_result` tool with `status: "pr_open"` and `pr_url`, the PR's URL.
 
 If you are blocked at any point (a finding needs a decision, the tests cannot pass, a tool is missing), stop, keep
-the `Draft: ` prefix, remove the worktree and finish by calling the `report_result` tool with `status: "blocked"`
+the PR a draft with its `Draft: ` prefix, remove the worktree and finish by calling the `report_result` tool with `status: "blocked"`
 and `question`, the one question a human must answer.
 
 Stopping without calling `report_result` sends the ticket to a human.

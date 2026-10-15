@@ -26,8 +26,9 @@ for it to finish.
    (on GitHub: `gh pr comment <pr url> --body-file <file>`). Name the findings you dropped and why, after the list.
    With none left, post `Checked review findings: none`. The fixer and /learn find this comment by that first line
    and refer to findings by their numbers, so keep both exact.
-5. With no findings left, remove the `Draft: ` prefix from the PR's title (on GitHub:
-   `gh pr edit <pr url> --title "<the title without the prefix>"`). With findings left, keep it: a fixer takes them.
+5. With no findings left, mark the PR ready for review on the host (on GitHub: `gh pr ready <pr url>`) and remove
+   the `Draft: ` prefix from its title (on GitHub: `gh pr edit <pr url> --title "<the title without the prefix>"`).
+   With findings left, keep both: a fixer takes them.
 6. Finish by calling the `report_result` tool with `status: "reviewed"` and `findings`, the number of findings in
    your checked list.
 

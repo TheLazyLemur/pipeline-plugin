@@ -150,7 +150,7 @@ export const pass = async (d: Deps): Promise<string[]> => {
     description: `${TAG} ${next.ticket_id}`,
     subagentType: `${d.plugin}:implementer-${next.model}`,
     prompt: `Ticket ${next.ticket_id}: ${next.title}\n${next.url ?? ''}\n\n${
-      draft ? 'Open the PR with the title prefix "Draft: ": agents review it before the user does.' : 'Open the PR without a "Draft: " title prefix.'
+      draft ? 'Open the PR as a draft on the host, with the title prefix "Draft: ": agents review it before the user does.' : 'Open the PR without a "Draft: " title prefix.'
     }`,
   })
   if (s.deny !== undefined) {
