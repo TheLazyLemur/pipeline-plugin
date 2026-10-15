@@ -42,3 +42,8 @@ Things SPEC.md does not settle. Everything else the build decided is described i
     they have instead? The limits fail open: an error in either hook (a sqlite failure, a typo such as
     `Agent time limit: 2h` in routing.md) is logged in the pipeline log and the request or call runs unlimited. One pair of limits serves every model and role until ticket 22's
     usage shows how to tune them. A request with no `usage` leaves the context of the last one that had it.
+13. **Decided: agent prompt changes need a session restart; code changes do not.** A hot reload swaps in `hooks/` and
+    `src/`, but a running session keeps the `agents/*.md` it loaded at start: ticket 24's fixer ran ticket 23's old
+    `fixer.md` and left its PR a draft. The loop keeps each prompt file's mtime from session start in `$.state`
+    (declared in `types/pipeline.d.ts`), and each reload that finds one changed, added or removed since then logs a
+    line naming them and asking for a restart. A file touched but not edited counts as changed.
