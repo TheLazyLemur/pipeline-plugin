@@ -1,6 +1,7 @@
 import type { Register } from 'claude-code'
 import { LOOP_PLUGIN, TAG } from '../pipeline-agents/src/agents.ts'
 import { pass } from '../src/loop.ts'
+import { type Prompts, promptsChanged } from '../src/prompts.ts'
 
 const FIRST_MS = 10_000
 // STALE in src/loop.ts is 3 of these intervals: change it with this.
@@ -15,6 +16,18 @@ export const register: Register = on => {
     const root = await $.session.root()
     // read once, so every claim and heartbeat of this loop carries the same owner
     const session = await $.session.id()
+    try {
+      const entries = await $.fs.list(`${$.plugin.root}/agents`)
+      const now: Prompts = Object.fromEntries(entries.filter(f => f.name.endsWith('.md')).map(f => [f.name, f.mtimeMs]))
+      const { value: atStart } = await $.state.get({ plugin: 'pipeline', key: 'agentPrompts' })
+      if (atStart === undefined) await $.state.set({ plugin: 'pipeline', key: 'agentPrompts' }, now)
+      else {
+        const line = promptsChanged(atStart, now)
+        if (line) $.ui.log(line)
+      }
+    } catch (err) {
+      $.ui.log(`agent prompt check failed: ${(err as Error).message}`)
+    }
     let isRunning = false
     const tick = async () => {
       if (isRunning) return
