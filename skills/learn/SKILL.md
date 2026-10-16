@@ -41,8 +41,8 @@ The database is `.claude/pipeline/pipeline.db`, table `tickets`, read and writte
      review agents' (`agents/reviewer-spec.md`, `reviewer-quality.md`, `verifier.md`, `fixer.md`) if agent review
      should have caught it,
    - `.claude/pipeline/readiness.md` if the ticket should not have been ready,
-   - `.claude/pipeline/rubric.md` or `routing.md` if it went to the wrong model or skipped agent review
-     (routing.md's `Review threshold`),
+   - `.claude/pipeline/rubric.md` or `routing.md` if it went to the wrong model, or a too-high `Review size` in
+     routing.md if a large PR skipped agent review,
    - or a checklist the project keeps.
 6. Show each proposed change as a diff. Apply it only when the user approves it.
 7. Once every proposal of the run has been approved or declined, mark each PR this run processed as learned:

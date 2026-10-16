@@ -12,10 +12,12 @@ Security-critical work (auth, payments, secrets, permissions, crypto) goes to fa
 
 ## Review
 
-Tickets at or above this difficulty open as a `Draft: ` PR and are reviewed by agents one model tier up before
-you see them. Raise it above 5 to turn agent review off.
+Every PR opens as a draft. Once it is open, the loop reads its diff: a change of at least this many lines (added
+plus removed) is reviewed by agents on opus before you see it. A smaller one is reviewed when it spans more than one
+module or service, changes a schema or migration, changes a published contract, or touches auth, permissions,
+secrets, payments or crypto. Any other PR is marked ready and comes straight to you.
 
-Review threshold: 3
+Review size: 300
 
 ## Agent limits
 

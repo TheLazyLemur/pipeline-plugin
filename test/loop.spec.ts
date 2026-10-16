@@ -46,6 +46,20 @@ const sqliteTracker = async (run: Run, fill: string, merged: string[]): Promise<
   })
 }
 
+/** An empty tracker whose one PR has `diff`, recording each PR marked ready. */
+const withPr = (diff: string) => {
+  const readied: string[] = []
+  const tracker = fakeTracker({
+    waiting: () => [],
+    done: () => [],
+    blockers: () => [],
+    pr_merged: () => ({ merged: false }),
+    pr_diff: () => diff,
+    pr_ready: ({ url }) => readied.push(String(url)),
+  })
+  return { tracker, readied }
+}
+
 /** Deps over the project whose tracker is `tracker`. */
 const tracked = (run: Run, tracker: Tracker, paths?: { root: string; home: string }) => {
   const made = deps(run, [], false, 's1', paths)
@@ -270,32 +284,85 @@ test('a refused spawn puts the ticket back to ready, unowned', async () => {
   assert.match(log.join('\n'), /T-1 not started: no verdict/)
 })
 
-test('a difficulty 3+ ticket whose implementer reports a PR moves to review, and the next pass starts both reviewers one tier up', async () => {
+test('a large draft PR is reviewed without asking Haiku: the pass after the report starts both reviewers on opus', async () => {
   // given
-  // ... a difficulty 3 opus ticket at stage implement and the default review threshold
+  // ... a difficulty 1 sonnet ticket at stage implement whose PR changes 300 lines, the default review size
   const { run, db } = await freshProject()
-  await sql(run, db, `insert into tickets (ticket_id, title, status, stage, model, difficulty) values ('T-1', 'one', 'in_progress', 'implement', 'opus', 3)`)
+  await sql(run, db, `insert into tickets (ticket_id, title, status, stage, model, difficulty) values ('T-1', 'one', 'in_progress', 'implement', 'sonnet', 1)`)
   const { d, spawned } = deps(run, [])
+  const asked: unknown[] = []
+  d.complete = async r => {
+    asked.push(r.prompt)
+    return { isAnswered: true, text: '{"review": false, "reason": "never asked"}' } as ModelCompleteResult
+  }
+  d.tracker = withPr(`+++ b/a.ts\n${'+x\n'.repeat(300)}`).tracker
 
   // when
   // ... the implementer reports its draft PR through pipeline-agents, then the loop's pass runs with no agent live
   await onReport(run, 'pipeline', live('pipeline T-1'), { status: 'pr_open', pr_url: 'https://git/pr/1' })
   const before = spawned.length
-  await pass(d)
+  const log = await pass(d)
 
   // then
-  // ... the report started nothing; the pass started the spec and quality reviewers on fable with the PR in their prompt
+  // ... the report started nothing; the pass asked Haiku nothing and started the spec and quality reviewers on opus with the PR in their prompt
   assert.equal(before, 0)
+  assert.deepEqual(asked, [])
+  assert.match(log.join('\n'), /T-1 is reviewed: 300 lines changed, at or above the review size of 300/)
   assert.deepEqual(await sql(run, db, `select status, stage, started, pr_url from tickets`), [{ status: 'in_progress', stage: 'review', started: 1, pr_url: 'https://git/pr/1' }])
   assert.deepEqual(
     spawned.map(s => [s.description, s.subagentType, s.model]),
     [
-      ['pipeline T-1 reviewer-spec', 'pipeline:reviewer-spec', 'fable'],
-      ['pipeline T-1 reviewer-quality', 'pipeline:reviewer-quality', 'fable'],
+      ['pipeline T-1 reviewer-spec', 'pipeline:reviewer-spec', 'opus'],
+      ['pipeline T-1 reviewer-quality', 'pipeline:reviewer-quality', 'opus'],
     ],
   )
   assert.match(spawned[0]?.prompt ?? '', /PR: https:\/\/git\/pr\/1/)
   assert.match(spawned[0]?.prompt ?? '', /^Worktree: \/home\/u\/\.claude\/pipeline-worktrees\/project\/T-1-reviewer-spec$/m)
+})
+
+test('a small draft PR that Haiku finds crosses a surface is reviewed', async () => {
+  // given
+  // ... a ticket that has just reached review with a two-line PR, and Haiku answering that it touches auth
+  const { run, db } = await freshProject()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, stage, started, model, difficulty, pr_url, owner) values ('T-1', 'one', 'in_progress', 'review', 0, 'sonnet', 1, 'https://git/pr/1', 's1')`)
+  const { d, spawned } = deps(run, [])
+  const asked: unknown[] = []
+  d.complete = async r => {
+    asked.push(r.prompt)
+    return { isAnswered: true, text: '{"review": true, "reason": "it changes who may sign in"}' } as ModelCompleteResult
+  }
+  const pr = withPr('+++ b/auth.ts\n-allow(admin)\n+allow(anyone)\n')
+  d.tracker = pr.tracker
+
+  // when
+  // ... a pass runs
+  const log = await pass(d)
+
+  // then
+  // ... Haiku read the diff, both reviewers started, and the PR was not marked ready
+  assert.deepEqual(asked, ['+++ b/auth.ts\n-allow(admin)\n+allow(anyone)\n'])
+  assert.match(log.join('\n'), /T-1 is reviewed: it changes who may sign in/)
+  assert.deepEqual(spawned.map(s => s.description), ['pipeline T-1 reviewer-spec', 'pipeline T-1 reviewer-quality'])
+  assert.deepEqual(pr.readied, [])
+})
+
+test('a pr_diff that fails leaves the ticket at review, not started, for the next pass', async () => {
+  // given
+  // ... a ticket that has just reached review, and a tracker whose pr_diff fails
+  const { run, db } = await freshProject()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, stage, started, model, difficulty, pr_url, owner) values ('T-1', 'one', 'in_progress', 'review', 0, 'sonnet', 1, 'https://git/pr/1', 's1')`)
+  const { d, spawned } = deps(run, [])
+  d.tracker = fakeTracker({ waiting: () => [], done: () => [], blockers: () => [], pr_diff: () => Promise.reject(new Error('auth expired')) })
+
+  // when
+  // ... a pass runs
+  const log = await pass(d)
+
+  // then
+  // ... nothing started, the ticket is unchanged, and the failure is logged
+  assert.deepEqual(spawned, [])
+  assert.deepEqual(await sql(run, db, `select status, stage, started from tickets`), [{ status: 'in_progress', stage: 'review', started: 0 }])
+  assert.match(log.join('\n'), /T-1 review not decided, trying again next pass: auth expired/)
 })
 
 test('a ticket whose PR merged has its leftover worktrees removed, and another ticket keeps its own', async () => {
@@ -346,23 +413,29 @@ test('a ticket marked done in the tracker has its leftover worktree removed', as
   assert.match(log.join('\n'), /1 verifier left a worktree; removed /)
 })
 
-test('a difficulty 1-2 ticket is told to open a normal PR and goes straight to pr_open', async () => {
+test('every implementer opens a draft, and a small PR that crosses no surface is marked ready and goes to pr_open', async () => {
   // given
-  // ... a ready difficulty 2 sonnet ticket
+  // ... a ready difficulty 5 fable ticket whose PR will change one line, and Haiku answering that it needs no review
   const { run, db } = await freshProject()
-  await sql(run, db, `insert into tickets (ticket_id, title, status, model, difficulty) values ('T-1', 'one', 'ready', 'sonnet', 2)`)
+  await sql(run, db, `insert into tickets (ticket_id, title, status, model, difficulty) values ('T-1', 'one', 'ready', 'fable', 5)`)
   const { d, spawned } = deps(run, [])
+  const pr = withPr('+++ b/README.md\n+a typo fixed\n')
+  d.tracker = pr.tracker
 
   // when
-  // ... a pass starts its implementer, which then reports a PR
+  // ... a pass starts its implementer, which reports a PR, then the next pass runs with no agent live
   await pass(d)
   await onReport(run, 'pipeline', live('pipeline T-1'), { status: 'pr_open', pr_url: 'https://git/pr/1' })
+  d.complete = async () => ({ isAnswered: true, text: '{"review": false, "reason": "a one-line README change"}' }) as ModelCompleteResult
+  const log = await pass(d)
 
   // then
-  // ... the implementer was told to open a normal PR, the ticket is pr_open and no reviewer started
-  assert.match(spawned[0]?.prompt ?? '', /`pr_create` with `draft: false`/)
+  // ... the implementer was told to open a draft, its PR was marked ready, the ticket is pr_open and no reviewer started
+  assert.match(spawned[0]?.prompt ?? '', /`pr_create` with `draft: true`/)
+  assert.deepEqual(pr.readied, ['https://git/pr/1'])
   assert.deepEqual(spawned.map(s => s.description), ['pipeline T-1'])
   assert.deepEqual(await sql(run, db, `select status, pr_url from tickets`), [{ status: 'pr_open', pr_url: 'https://git/pr/1' }])
+  assert.match(log.join('\n'), /T-1 needs no review \(a one-line README change\): its PR is yours/)
 })
 
 test('a review whose reviewers are done hands over to the verifier one tier up', async () => {

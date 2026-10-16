@@ -15,8 +15,8 @@ const whole = (routing: string, label: string, fallback: number): number => {
   return n
 }
 
-/** The difficulty at and above which a ticket is reviewed, from routing.md's `Review threshold: <n>` line. */
-export const reviewFrom = (routing: string): number => whole(routing, 'Review threshold', 3)
+/** The lines changed (added plus removed) at and above which a PR is reviewed whatever it touches, from routing.md's `Review size: <n>` line. */
+export const reviewSize = (routing: string): number => whole(routing, 'Review size', 300)
 
 /** Each pipeline agent run's limits: context tokens and minutes of wall time, from routing.md's `Agent token limit:` and `Agent time limit:` lines. */
 export type Limits = { tokens: number; minutes: number }

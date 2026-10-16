@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import type { ModelCompleteRequest, ModelCompleteResult } from 'claude-code'
 import { sql } from '../pipeline-agents/src/store.ts'
-import { reviewFrom } from '../pipeline-agents/src/routing.ts'
+import { reviewSize } from '../pipeline-agents/src/routing.ts'
 import { triage } from '../src/triage.ts'
 import { freshDb, run } from './helpers.ts'
 
@@ -85,18 +85,18 @@ test('the ticket body reaches the Haiku prompt', async () => {
   assert.match(prompts.join(), /Google sign-in\.\n- a user can sign in with Google/)
 })
 
-test('the review threshold is read from routing.md, 3 when the line is missing, and a bad one fails', () => {
+test('the review size is read from routing.md, 300 when the line is missing, and a bad one fails', () => {
   // given
-  // ... the default routing.md, one with the threshold raised, one written before it existed, and one with a typo
+  // ... the default routing.md, one with the size raised, one written before it existed, and one with a typo
   const routing = readFileSync(join(import.meta.dirname, '../skills/tracker-setup/defaults/routing.md'), 'utf8')
 
   // when
   // ... each is read
-  const read = [routing, routing.replace('Review threshold: 3', 'review threshold: 6'), '# Routing\n'].map(reviewFrom)
-  const bad = () => reviewFrom('Review threshold: three')
+  const read = [routing, routing.replace('Review size: 300', 'review size: 600'), '# Routing\n'].map(reviewSize)
+  const bad = () => reviewSize('Review size: three')
 
   // then
   // ... the defaults and the raised value come back, and the typo is named
-  assert.deepEqual(read, [3, 6, 3])
+  assert.deepEqual(read, [300, 600, 300])
   assert.throws(bad, /must be a whole number from 1, not "three"/)
 })

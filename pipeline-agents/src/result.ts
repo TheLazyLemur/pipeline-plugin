@@ -2,7 +2,6 @@ import type { AgentInfo } from 'claude-code'
 import { type Role, agentOf } from './agents.ts'
 import { isHardStopped, readRun } from './limits.ts'
 import { DB, type Run, type Stage, type Ticket, lit, sql } from './store.ts'
-import { readRouting, reviewFrom } from './routing.ts'
 
 export const REPORT_TOOL = {
   name: 'report_result',
@@ -46,7 +45,7 @@ const apply = async (run: Run, db: string, id: string, stage: Stage, set: string
 }
 
 /** Records a report_result call; throws the refusal the agent reads. */
-const record = async (run: Run, db: string, plugin: string, agent: AgentInfo | undefined, input: Record<string, unknown>, reviewFrom: number): Promise<Reported> => {
+const record = async (run: Run, db: string, plugin: string, agent: AgentInfo | undefined, input: Record<string, unknown>): Promise<Reported> => {
   const who = agentOf(agent, plugin)
   if (who === null) throw new Error('report_result is only for the pipeline agents')
   const stage = REPORTS_AT[who.role]
@@ -70,24 +69,22 @@ const record = async (run: Run, db: string, plugin: string, agent: AgentInfo | u
   const url = text(input.pr_url)
   if (url === null) throw new Error('status pr_open needs pr_url')
   if (who.role === 'implementer') {
-    const [t] = (await sql(run, db, `select difficulty, stage from tickets where ticket_id = ${lit(id)}`)) as Ticket[]
-    // a null stage is a ticket started before review existed: its implementer was not told to open a draft
-    if (t?.stage === 'implement') {
-      if (t.difficulty === null) throw new Error(`${id} is in progress with no difficulty`)
-      if (t.difficulty >= reviewFrom)
-        return apply(run, db, id, stage, `stage = 'review', started = 0, pr_url = ${lit(url)}`, 'a draft PR', `${id} has a draft PR for review: ${url}`, 'review')
-    }
+    const [t] = (await sql(run, db, `select stage from tickets where ticket_id = ${lit(id)}`)) as Ticket[]
+    // every implementer opens a draft; the loop's pass decides from its diff whether it is reviewed. A null stage is
+    // a ticket started before review existed: its implementer was not told to open a draft
+    if (t?.stage === 'implement')
+      return apply(run, db, id, stage, `stage = 'review', started = 0, pr_url = ${lit(url)}`, 'a draft PR', `${id} has a draft PR: ${url}`, 'review')
   }
   return apply(run, db, id, stage, `status = 'pr_open', restarts = 0, pr_url = ${lit(url)}`, 'a PR', `${id} has a PR: ${url}`)
 }
 
 /**
- * Handles a report_result call; `reviewFrom` is routing.md's review threshold. Every call resolves one log line:
+ * Handles a report_result call. Every call resolves one log line:
  * a refusal carries the reason the agent reads in `deny`.
  */
-export const report = async (run: Run, db: string, plugin: string, agent: AgentInfo | undefined, input: Record<string, unknown>, reviewFrom: number): Promise<Reported> => {
+export const report = async (run: Run, db: string, plugin: string, agent: AgentInfo | undefined, input: Record<string, unknown>): Promise<Reported> => {
   try {
-    return await record(run, db, plugin, agent, input, reviewFrom)
+    return await record(run, db, plugin, agent, input)
   } catch (err) {
     const deny = (err as Error).message
     return { log: `${agentOf(agent, plugin)?.ticket ?? agent?.description ?? 'unknown agent'} report_result refused: ${deny}`, changed: false, deny }
@@ -100,7 +97,7 @@ export const report = async (run: Run, db: string, plugin: string, agent: AgentI
  * this plugin and its own calls would skip them (docs/adr/0001). Resolves one log line and, for a refusal, `deny`.
  */
 export const onReport = async (run: Run, plugin: string, agent: AgentInfo | undefined, input: Record<string, unknown>): Promise<{ log: string; changed: boolean; deny?: string }> => {
-  const r = await report(run, DB, plugin, agent, input, reviewFrom(await readRouting(run)))
+  const r = await report(run, DB, plugin, agent, input)
   return { log: r.log, changed: r.changed, deny: r.deny }
 }
 

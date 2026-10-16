@@ -24,6 +24,11 @@ while a command still runs is read as the end of your work.
 3. Implement the ticket, following the project's CLAUDE.md and rules. Add or update tests for the behaviour.
    For a bug fix, revert the fix and watch each new test fail, then restore it: a test that stays green without
    the fix does not test it.
+   Before changing shared behaviour, find every caller and every variant that reaches it (other fields, other
+   entities, other error paths) and check each against the new behaviour, not only the example the ticket names.
+   For multi-step writes and async fallbacks, work through a partial failure, a retry, and a user acting in
+   between: gate dependent edits on saved state, and record only what has actually happened. Test fixtures must
+   be states the real dependency can produce, and every new branch gets a test that fails without it.
 4. Run the tests. Do not open a PR with failing tests. Run every command you added or changed in a skill, prompt
    or script from the project root, the way an agent would invoke it, not from the skill's own folder.
    Then search code comments, docstrings, test descriptions, docs and READMEs for wording that describes the

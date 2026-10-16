@@ -97,7 +97,7 @@ spawned from the loop's timer (`docs/adr/0001`). So the repo ships two plugins. 
 loop: the timer, sync, triage, spawning every agent, and the notice filter. `pipeline-agents` (`pipeline-agents/`)
 holds every hook that must hear those agents: `report_result`, the `pipeline.db` guard, the worktree guard, the `tool.check` allow and
 the `SubagentStop` guard, the `turn.complete` hook that records their usage and the agent limits. It recognises them as agents spawned by `pipeline`. The code both use (the store, agent
-identity, results, the review threshold and the limits) lives in `pipeline-agents/src/`, since a plugin can import only from inside
+identity, results, the review size and the limits) lives in `pipeline-agents/src/`, since a plugin can import only from inside
 its own folder; `src/` holds the loop's own code. `pipeline` declares `pipeline-agents` under `dependencies`.
 
 ### The agents' results
@@ -110,8 +110,8 @@ never touch the database: a second `tool.call` hook refuses any Bash command of 
 
 | reporter | result | ticket |
 |---|---|---|
-| implementer | pr_open, difficulty below the review threshold, or a ticket started before stages (null stage) | `pr_open` with `pr_url` |
-| implementer | pr_open, difficulty at or above the threshold | stage `review` with `pr_url`; the next pass spawns both reviewers |
+| implementer | pr_open, a ticket started before stages (null stage) | `pr_open` with `pr_url` |
+| implementer | pr_open | stage `review` with `pr_url`; the next pass decides from the diff whether it is reviewed |
 | verifier | reviewed, 0 findings | `pr_open` |
 | verifier | reviewed, more than 0 findings | stage `fix`; the next pass spawns the fixer |
 | fixer | pr_open | `pr_open` with `pr_url` |
@@ -148,16 +148,21 @@ main checkout or merely outside the worktree. Its known gaps are in NOTES.md. Wh
 merged PR or by the tracker's own done list, the pass removes every worktree left under the ticket's five paths
 (`git worktree remove --force`, then `git worktree prune`) and touches nothing else.
 
-### Agent review (difficulty at or above the review threshold)
-Design: `docs/specs/agent-review.md`. The threshold is routing.md's `Review threshold: <n>` line (3 when the line is
-missing). Such a ticket's implementer opens its PR as a draft (`pr_create` with `draft: true`: a host draft with a
-`Draft: ` title prefix). Then, all at status
+### Agent review (decided from the diff)
+Design: `docs/specs/agent-review.md` and `docs/specs/review-by-surface.md`. Every implementer opens its PR as a draft
+(`pr_create` with `draft: true`: a host draft with a `Draft: ` title prefix). The pass after its report reads the
+diff with `pr_diff`: a change of at least routing.md's `Review size: <lines>` (300 when the line is missing; added
+plus removed lines) is reviewed. A smaller one goes to Haiku, which reviews it when it spans more than one module,
+service or datastore, changes a schema or migration, changes a published contract, or touches auth, permissions,
+secrets, payments or crypto. A PR that needs no review is marked ready with `pr_ready` and the ticket goes to
+`pr_open`. A missing tracker tool or a failed step leaves the ticket at `review`, not started, for the next pass.
+Difficulty only routes the model. For a reviewed PR, all at status
 `in_progress`, the `stage` column moves `implement` → `review` → `verify` → (`fix`) and each stage's agents run:
 
-- `reviewer-spec` and `reviewer-quality`, read-only, on the model one tier above the routed one (sonnet → opus,
-  opus → fable, fable → fable): each reads the ticket, any spec it references and the PR at its head commit, and
+- `reviewer-spec` and `reviewer-quality`, read-only, on opus whatever the routed model (fable eats tokens, so
+  review never escalates to it): each reads the ticket, any spec it references and the PR at its head commit, and
   posts its findings as one ticket comment.
-- `verifier`, on the same tier: checks each finding against the code, drops false ones, merges duplicates, posts
+- `verifier`, on opus too: checks each finding against the code, drops false ones, merges duplicates, posts
   the checked list under the heading `Checked review findings` on the ticket and the PR, marks the PR ready
   (`pr_ready`, which also removes the `Draft: ` prefix) when none are left, and reports the count.
 - `fixer`, on the routed model: addresses the checked findings on the same branch and PR, comments on the PR what
@@ -265,7 +270,7 @@ title, URL and body. Writes status, difficulty, confidence, model and reason.
 ### Routing (`.claude/pipeline/routing.md`)
 A short table: difficulty to model. Example: 1-2 sonnet, 3-4 opus, 5 fable. Security-critical goes to fable.
 Applied by Haiku at triage, not by a parser, and only to sonnet, opus or fable, the models with an implementer.
-Its `Review threshold: <n>` line is read by the mod: the difficulty at and above which a ticket gets agent review.
+Its `Review size: <lines>` line is read by the mod: the lines changed at and above which a PR gets agent review whatever it touches.
 Its `Agent token limit: <n>` and `Agent time limit: <minutes>` lines are the agent limits.
 
 ### Implementers (`agents/implementer-sonnet.md`, `-opus.md`, `-fable.md`)
