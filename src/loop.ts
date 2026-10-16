@@ -1,6 +1,6 @@
 import type { AgentInfo, AgentSpawnArgs, AgentSpawnResult } from 'claude-code'
 import { ROLES, type Role, TAG, agentOf } from '../pipeline-agents/src/agents.ts'
-import { worktreeOf } from '../pipeline-agents/src/guards.ts'
+import { namesWorktree, worktreeOf } from '../pipeline-agents/src/guards.ts'
 import { reviewFrom, stackDepth } from '../pipeline-agents/src/routing.ts'
 import { DB, type Run, type Stage, type Ticket, lit, migrate, sql } from '../pipeline-agents/src/store.ts'
 import { forgetLeft, notify } from './notify.ts'
@@ -166,12 +166,20 @@ const work = async (d: Deps, { tracker, readiness, rubric, routing }: Record<'tr
   // one ticket at a time: no new implementer while any ticket is at any stage
   if (waiting > 0) return log
 
-  const [next] = (await sql(
+  // a ready id that cannot name a worktree goes to a human before any claim: after one, worktreeLine would throw and
+  // leave the ticket in_progress; before one, it would throw every pass and hold up every ticket after it
+  const ready = (await sql(
     d.run,
     DB,
     `select t.ticket_id, t.title, t.url, t.model, t.difficulty, b.pr_url as stack_on from tickets t left join tickets b on b.ticket_id = t.stacked_on
-     where t.status = 'ready' order by t.rowid limit 1`,
+     where t.status = 'ready' order by t.rowid`,
   )) as (Ticket & { stack_on: string | null })[]
+  for (const t of ready.filter(t => !namesWorktree(t.ticket_id))) {
+    const question = `Ticket id ${JSON.stringify(t.ticket_id)} cannot name a worktree: the tracker's ids must be one path segment (letters, digits, and . _ @ + -). Fix the tracker setup, then send the ticket back to new.`
+    const moved = await sql(d.run, DB, `update tickets set status = 'needs_human', question = ${lit(question)} where ticket_id = ${lit(t.ticket_id)} and status = 'ready' returning ticket_id`)
+    if (moved.length > 0) log.push(`${t.ticket_id} needs you: its id cannot name a worktree`)
+  }
+  const next = ready.find(t => namesWorktree(t.ticket_id))
   if (next === undefined) return log
   if (!MODELS.includes(next.model as (typeof MODELS)[number])) throw new Error(`${next.ticket_id} is ready with no routed model: ${next.model}`)
   if (next.difficulty === null) throw new Error(`${next.ticket_id} is ready with no difficulty`)
