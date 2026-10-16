@@ -29,8 +29,8 @@ sync, and the instructions its agents follow to talk to the tracker. No adapter 
    tracker such as a SQLite file, inline commands in tracker.md are fine and no script is needed.
 
    A script needs contract tests, in the project's own test setup, that run each subcommand and check the output
-   shape the mod relies on, without a live loop: the JSON fields of `waiting`, `done` and `blockers`, every
-   `id` that `waiting` and `blockers` print and every `blocked_by` matching the id rule below,
+   shape the mod relies on, without a live loop: the JSON fields of `waiting`, `done` and `blockers`, that every
+   `id` that `waiting` and `blockers` print, and every `blocked_by`, matches the id rule below,
    `{"merged": true|false}` from `merged`, and `mark-done` succeeding on an already-done ticket and failing on
    a bad id. Stub or record the API responses; the tests must not need to change a real ticket. They must pass
    before tracker.md is saved.
@@ -47,6 +47,7 @@ sync, and the instructions its agents follow to talk to the tracker. No adapter 
    `id` and `blocked_by` are the tracker's ids, as strings or integers. Each must be one path segment, because the
    pipeline names every agent's worktree `<id>-<role>`: it matches `^[A-Za-z0-9_.@+-]+$` and is neither `.` nor
    `..`. So `42` or `APS-756`, never `owner/repo#42` or a URL: print the tracker's short id, not a reference to it.
+   The rule is `TICKET` and `bad()` in `pipeline-agents/src/guards.ts`; if those change, change it here too.
 
    Each loop pass, before syncing, the mod runs two more for every ticket whose PR is open, so a merged blocker
    releases its dependents in the same pass. Each gets one value as `$1`, passed as an argument and never
@@ -57,12 +58,14 @@ sync, and the instructions its agents follow to talk to the tracker. No adapter 
    - `## Mark a ticket done` gets the tracker ticket id as `$1` and moves it to the done status, exiting
      non-zero on failure. It must succeed when the ticket is already done (some trackers close on merge).
 
-   Run each command and check its output before saving. Pipe the output of `waiting` and of `blockers` through
-   `jq -s -e '(.[0] // []) | all(.[]; [.id, .blocked_by // empty] | all(tostring | test("^[A-Za-z0-9_.@+-]+$") and . != "." and . != ".."))'`,
-   while at least one ticket is waiting and, if the tracker has links, one link exists, since an empty list proves
-   nothing. It exits non-zero when an id breaks the rule: fix the command and do not save tracker.md until it
-   passes. Check the merge command on one merged and one open PR, and mark-done only with the user's go-ahead, on
-   a ticket they name. Then add exact, copy-pasteable commands or tool calls, which the agents follow, for:
+   Run each command and check its output before saving. Pipe the output of `waiting` through
+   `jq -s -e 'def ok: (type == "string" or type == "number") and (tostring | test("^[A-Za-z0-9_.@+-]+$") and . != "." and . != ".."); .[0] | length > 0 and all(.[]; .id | ok)'`
+   while at least one ticket is waiting, and, if the tracker has links, the output of `blockers` through
+   `jq -s -e 'def ok: (type == "string" or type == "number") and (tostring | test("^[A-Za-z0-9_.@+-]+$") and . != "." and . != ".."); .[0] | length > 0 and all(.[]; (.id | ok) and (.blocked_by | ok))'`
+   while one link exists. Each exits non-zero when an id or `blocked_by` is missing, null or breaks the rule, and
+   on empty output, which proves nothing: fix the command and do not save tracker.md until both pass. Check the
+   merge command on one merged and one open PR, and mark-done only with the user's go-ahead, on a ticket they
+   name. Then add exact, copy-pasteable commands or tool calls, which the agents follow, for:
    - reading one ticket in full (description, acceptance criteria, comments),
    - moving a ticket's status,
    - adding a comment to a ticket,
