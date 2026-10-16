@@ -60,7 +60,7 @@ flowchart TD
     impl --> pr[Implement, run tests, open PR]
     pr --> review{Difficulty at or above the review threshold?}
     review -- no --> open([status pr_open])
-    review -- yes --> reviewers[Draft PR: spec and quality reviewers one tier up post findings on the ticket]
+    review -- yes --> reviewers[Draft PR: spec and quality reviewers on opus post findings on the ticket]
     reviewers --> verifier[Verifier checks the findings, posts them on the ticket and the PR]
     verifier -- none left --> open
     verifier -- findings --> fixer[Fixer on the routed model fixes them on the same PR]

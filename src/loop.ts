@@ -4,7 +4,7 @@ import { worktreeOf } from '../pipeline-agents/src/guards.ts'
 import { reviewFrom } from '../pipeline-agents/src/routing.ts'
 import { DB, type Run, type Stage, type Ticket, lit, migrate, sql } from '../pipeline-agents/src/store.ts'
 import { type Tracker, closeMerged, sync } from './sync.ts'
-import { type Complete, MODELS, UP, triage } from './triage.ts'
+import { type Complete, MODELS, REVIEW_MODEL, triage } from './triage.ts'
 
 export type Deps = {
   /** `$.process.run` with the project root as cwd. */
@@ -48,13 +48,13 @@ const STALE = `(owner_seen is null or owner_seen < datetime('now', '-15 minutes'
 /** The agents a stage starts. */
 const STARTS: Record<Exclude<Stage, 'implement'>, readonly Role[]> = { review: ['reviewer-spec', 'reviewer-quality'], verify: ['verifier'], fix: ['fixer'] }
 
-/** Spawns the agents of a stage the ticket has just entered: reviewers and verifier one tier up, the fixer on the routed model. Resolves what to log. */
+/** Spawns the agents of a stage the ticket has just entered: reviewers and verifier on opus, the fixer on the routed model. Resolves what to log. */
 export const start = async (d: Pick<Deps, 'run' | 'spawn' | 'plugin' | 'root' | 'home'>, ticketId: string, stage: Exclude<Stage, 'implement'>): Promise<string> => {
   const [t] = (await sql(d.run, DB, `select ticket_id, title, url, model, pr_url from tickets where ticket_id = ${lit(ticketId)}`)) as Ticket[]
   if (t === undefined) throw new Error(`no ticket ${ticketId} to start ${stage} for`)
   const routed = t.model as (typeof MODELS)[number]
   if (!MODELS.includes(routed) || t.pr_url === null) throw new Error(`${ticketId} is at ${stage} with no routed model or PR: ${t.model}, ${t.pr_url}`)
-  const model = stage === 'fix' ? routed : UP[routed]
+  const model = stage === 'fix' ? routed : REVIEW_MODEL
   for (const role of STARTS[stage]) {
     const s = await d.spawn({
       description: `${TAG} ${ticketId} ${role}`,

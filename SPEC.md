@@ -154,10 +154,10 @@ missing). Such a ticket's implementer opens its PR as a draft (`pr_create` with 
 `Draft: ` title prefix). Then, all at status
 `in_progress`, the `stage` column moves `implement` → `review` → `verify` → (`fix`) and each stage's agents run:
 
-- `reviewer-spec` and `reviewer-quality`, read-only, on the model one tier above the routed one (sonnet → opus,
-  opus → fable, fable → fable): each reads the ticket, any spec it references and the PR at its head commit, and
+- `reviewer-spec` and `reviewer-quality`, read-only, on opus whatever the routed model (fable eats tokens, so
+  review never escalates to it): each reads the ticket, any spec it references and the PR at its head commit, and
   posts its findings as one ticket comment.
-- `verifier`, on the same tier: checks each finding against the code, drops false ones, merges duplicates, posts
+- `verifier`, on opus too: checks each finding against the code, drops false ones, merges duplicates, posts
   the checked list under the heading `Checked review findings` on the ticket and the PR, marks the PR ready
   (`pr_ready`, which also removes the `Draft: ` prefix) when none are left, and reports the count.
 - `fixer`, on the routed model: addresses the checked findings on the same branch and PR, comments on the PR what
