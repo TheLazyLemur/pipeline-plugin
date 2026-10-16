@@ -10,8 +10,8 @@ export type Guides = { readiness: string; rubric: string; routing: string }
 /** The models with an implementer agent, `agents/implementer-<model>.md`. */
 export const MODELS = ['sonnet', 'opus', 'fable'] as const
 
-/** The tier above each model, which reviews its work. */
-export const UP: Record<(typeof MODELS)[number], (typeof MODELS)[number]> = { sonnet: 'opus', opus: 'fable', fable: 'fable' }
+/** The model every reviewer and the verifier run on, whatever the routed model: fable eats tokens, so review never escalates to it. */
+export const REVIEW_MODEL = 'opus'
 
 
 export type Verdict = {

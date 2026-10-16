@@ -287,14 +287,14 @@ test('a difficulty 3+ ticket whose implementer reports a PR moves to review, and
   await pass(d)
 
   // then
-  // ... the report started nothing; the pass started the spec and quality reviewers on fable with the PR in their prompt
+  // ... the report started nothing; the pass started the spec and quality reviewers on opus with the PR in their prompt
   assert.equal(before, 0)
   assert.deepEqual(await sql(run, db, `select status, stage, started, pr_url from tickets`), [{ status: 'in_progress', stage: 'review', started: 1, pr_url: 'https://git/pr/1' }])
   assert.deepEqual(
     spawned.map(s => [s.description, s.subagentType, s.model]),
     [
-      ['pipeline T-1 reviewer-spec', 'pipeline:reviewer-spec', 'fable'],
-      ['pipeline T-1 reviewer-quality', 'pipeline:reviewer-quality', 'fable'],
+      ['pipeline T-1 reviewer-spec', 'pipeline:reviewer-spec', 'opus'],
+      ['pipeline T-1 reviewer-quality', 'pipeline:reviewer-quality', 'opus'],
     ],
   )
   assert.match(spawned[0]?.prompt ?? '', /PR: https:\/\/git\/pr\/1/)
