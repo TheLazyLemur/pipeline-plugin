@@ -1,8 +1,9 @@
 import type { AgentInfo, AgentSpawnArgs, AgentSpawnResult } from 'claude-code'
 import { ROLES, type Role, TAG, agentOf } from '../pipeline-agents/src/agents.ts'
 import { worktreeOf } from '../pipeline-agents/src/guards.ts'
-import { reviewFrom } from '../pipeline-agents/src/routing.ts'
+import { reviewSize } from '../pipeline-agents/src/routing.ts'
 import { DB, type Run, type Stage, type Ticket, lit, migrate, sql } from '../pipeline-agents/src/store.ts'
+import { type Surface, surface } from './surface.ts'
 import { type Tracker, closeMerged, sync } from './sync.ts'
 import { type Complete, MODELS, REVIEW_MODEL, triage } from './triage.ts'
 
@@ -71,6 +72,31 @@ export const start = async (d: Pick<Deps, 'run' | 'spawn' | 'plugin' | 'root' | 
   return `${model} is at ${stage} for ${ticketId}`
 }
 
+/**
+ * Decides from its PR's diff whether a ticket that has just reached review is reviewed: starts both reviewers, or
+ * marks the PR ready and gives it to the user. A missing tracker tool or a failed step leaves the ticket where it is
+ * for the next pass. Resolves what to log.
+ */
+const decide = async (d: Deps, ticketId: string, routing: string): Promise<string[]> => {
+  const [t] = (await sql(d.run, DB, `select pr_url from tickets where ticket_id = ${lit(ticketId)}`)) as Ticket[]
+  if (typeof t?.pr_url !== 'string') throw new Error(`${ticketId} is at review with no PR`)
+  const url = t.pr_url
+  const size = reviewSize(routing)
+  if (d.tracker === null) return [`${ticketId} waits for a tracker tool to decide whether its PR is reviewed`]
+  let s: Surface
+  try {
+    const diff = await d.tracker('pr_diff', { url })
+    if (typeof diff !== 'string') throw new Error(`tracker pr_diff returned ${JSON.stringify(diff)?.slice(0, 200)}, not the diff as text`)
+    s = await surface(d.complete, diff, size)
+    if (!s.review) await d.tracker('pr_ready', { url })
+  } catch (err) {
+    return [`${ticketId} review not decided, trying again next pass: ${(err as Error).message}`]
+  }
+  if (s.review) return [`${ticketId} is reviewed: ${s.reason}`, await start(d, ticketId, 'review')]
+  await sql(d.run, DB, `update tickets set status = 'pr_open', restarts = 0 where ticket_id = ${lit(ticketId)} and status = 'in_progress' and stage = 'review' and started = 0`)
+  return [`${ticketId} needs no review (${s.reason}): its PR is yours`]
+}
+
 const read = async (run: Run, name: string) => {
   const r = await run(['cat', `.claude/pipeline/${name}.md`])
   return r.exitCode === 0 ? r.stdout : null
@@ -133,7 +159,10 @@ export const pass = async (d: Deps): Promise<string[]> => {
       const moved = await sql(d.run, DB, `update tickets set status = 'needs_human', restarts = 0, question = ${lit(question)} where ticket_id = ${lit(t.ticket_id)} and status = 'in_progress' and owner = ${lit(t.owner)} and ${STALE} returning ticket_id`)
       if (moved.length > 0) log.push(`${t.ticket_id} needs you: its owning session stopped`)
     } else if (working.has(t.ticket_id)) waiting++
-    else if (t.started === 0 && t.stage !== null && t.stage !== 'implement') {
+    else if (t.started === 0 && t.stage === 'review') {
+      waiting++
+      log.push(...(await decide(d, t.ticket_id, routing)))
+    } else if (t.started === 0 && t.stage !== null && t.stage !== 'implement') {
       waiting++
       log.push(await start(d, t.ticket_id, t.stage))
     } else if (t.stage === 'review') {
@@ -157,11 +186,9 @@ export const pass = async (d: Deps): Promise<string[]> => {
   // one ticket at a time: no new implementer while any ticket is at any stage
   if (waiting > 0) return log
 
-  const [next] = (await sql(d.run, DB, `select ticket_id, title, url, model, difficulty from tickets where status = 'ready' order by rowid limit 1`)) as Ticket[]
+  const [next] = (await sql(d.run, DB, `select ticket_id, title, url, model from tickets where status = 'ready' order by rowid limit 1`)) as Ticket[]
   if (next === undefined) return log
   if (!MODELS.includes(next.model as (typeof MODELS)[number])) throw new Error(`${next.ticket_id} is ready with no routed model: ${next.model}`)
-  if (next.difficulty === null) throw new Error(`${next.ticket_id} is ready with no difficulty`)
-  const draft = next.difficulty >= reviewFrom(routing)
   // the claim: one statement, so of passes racing (in this session or another) only one gets the row back, and only
   // while nothing is in_progress
   const claimed = await sql(
@@ -174,9 +201,7 @@ export const pass = async (d: Deps): Promise<string[]> => {
   const s = await d.spawn({
     description: `${TAG} ${next.ticket_id}`,
     subagentType: `${d.plugin}:implementer-${next.model}`,
-    prompt: `Ticket ${next.ticket_id}: ${next.title}\n${next.url ?? ''}\n${worktreeLine(d, next.ticket_id, 'implementer')}\n\n${
-      draft ? 'Open the PR as a draft, `pr_create` with `draft: true`: agents review it before the user does.' : 'Open the PR as a normal one, `pr_create` with `draft: false`.'
-    }`,
+    prompt: `Ticket ${next.ticket_id}: ${next.title}\n${next.url ?? ''}\n${worktreeLine(d, next.ticket_id, 'implementer')}\n\nOpen the PR as a draft, \`pr_create\` with \`draft: true\`: the loop decides from its diff whether agents review it before the user does.`,
   })
   if (s.deny !== undefined) {
     await sql(d.run, DB, `update tickets set status = 'ready', owner = null, owner_seen = null, restarts = 0 where ticket_id = ${lit(next.ticket_id)} and status = 'in_progress'`)

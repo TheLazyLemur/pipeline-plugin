@@ -28,7 +28,7 @@ test('pr_open opens the ticket with its PR url and logs it', async () => {
 
   // when
   // ... its implementer reports the PR
-  const r = await report(run, db, 'pipeline', implementer, { status: 'pr_open', pr_url: 'https://github.com/o/r/pull/7' }, 3)
+  const r = await report(run, db, 'pipeline', implementer, { status: 'pr_open', pr_url: 'https://github.com/o/r/pull/7' })
 
   // then
   // ... the ticket is pr_open with the url, and the change is logged
@@ -43,7 +43,7 @@ test('blocked sends the ticket to needs_human with the question, apostrophes int
 
   // when
   // ... its implementer reports a question holding an apostrophe and SQL
-  await report(run, db, 'pipeline', implementer, { status: 'blocked', question: "Should the hook use Dan's table'; drop table tickets; --?" }, 3)
+  await report(run, db, 'pipeline', implementer, { status: 'blocked', question: "Should the hook use Dan's table'; drop table tickets; --?" })
 
   // then
   // ... the question is stored verbatim and the table survives
@@ -57,7 +57,7 @@ test('pr_open without pr_url is refused and leaves the ticket in progress', asyn
 
   // when
   // ... its implementer reports pr_open with no url
-  const r = await report(run, db, 'pipeline', implementer, { status: 'pr_open' }, 3)
+  const r = await report(run, db, 'pipeline', implementer, { status: 'pr_open' })
 
   // then
   // ... the call is refused with the reason, which is logged, and the row is unchanged
@@ -73,7 +73,7 @@ test('a call from an agent the plugin did not spawn as an implementer is refused
 
   // when
   // ... that agent reports a PR
-  const r = await report(run, db, 'pipeline', stranger, { status: 'pr_open', pr_url: 'https://github.com/o/r/pull/7' }, 3)
+  const r = await report(run, db, 'pipeline', stranger, { status: 'pr_open', pr_url: 'https://github.com/o/r/pull/7' })
 
   // then
   // ... the call is refused with the reason, which is logged against the agent, and the row is unchanged
@@ -89,7 +89,7 @@ test('a report for a ticket no longer in progress leaves the row unchanged and l
 
   // when
   // ... its implementer reports a PR
-  const r = await report(run, db, 'pipeline', implementer, { status: 'pr_open', pr_url: 'https://github.com/o/r/pull/7' }, 3)
+  const r = await report(run, db, 'pipeline', implementer, { status: 'pr_open', pr_url: 'https://github.com/o/r/pull/7' })
 
   // then
   // ... the row is unchanged and the log says what was reported and the status it found
@@ -180,34 +180,19 @@ test('a reviewer soft-stopped at a limit sends its ticket to needs_human when it
 
 const staged = (db: string) => sql(run, db, `select status, stage, pr_url from tickets`)
 
-test('an implementer of a ticket at or above the review threshold reporting a PR moves it to review', async () => {
+test('an implementer reporting a PR moves its ticket to review whatever its difficulty, for the loop to decide', async () => {
   // given
-  // ... a difficulty 3 ticket at stage implement, with the threshold at 3
-  const db = await withTicket('in_progress', `stage = 'implement', difficulty = 3`)
+  // ... a difficulty 1 ticket at stage implement
+  const db = await withTicket('in_progress', `stage = 'implement', difficulty = 1`)
 
   // when
   // ... its implementer reports the draft PR
-  const r = await report(run, db, 'pipeline', implementer, { status: 'pr_open', pr_url: 'https://github.com/o/r/pull/7' }, 3)
+  const r = await report(run, db, 'pipeline', implementer, { status: 'pr_open', pr_url: 'https://github.com/o/r/pull/7' })
 
   // then
-  // ... it stays in progress at stage review with the url, and the reviewers are to be started
+  // ... it stays in progress at stage review with the url, for the loop's pass to decide its review
   assert.deepEqual(await staged(db), [{ status: 'in_progress', stage: 'review', pr_url: 'https://github.com/o/r/pull/7' }])
   assert.equal(r?.next, 'review')
-})
-
-test('an implementer of a ticket below the review threshold reporting a PR opens it', async () => {
-  // given
-  // ... a difficulty 2 ticket at stage implement, with the threshold at 3
-  const db = await withTicket('in_progress', `stage = 'implement', difficulty = 2`)
-
-  // when
-  // ... its implementer reports the PR
-  const r = await report(run, db, 'pipeline', implementer, { status: 'pr_open', pr_url: 'https://github.com/o/r/pull/7' }, 3)
-
-  // then
-  // ... the ticket is pr_open and nothing is to be started
-  assert.deepEqual(await staged(db), [{ status: 'pr_open', stage: 'implement', pr_url: 'https://github.com/o/r/pull/7' }])
-  assert.equal(r?.next, undefined)
 })
 
 test('a verifier reporting 0 findings opens the PR', async () => {
@@ -217,7 +202,7 @@ test('a verifier reporting 0 findings opens the PR', async () => {
 
   // when
   // ... its verifier reports no findings
-  const r = await report(run, db, 'pipeline', verifier, { status: 'reviewed', findings: 0 }, 3)
+  const r = await report(run, db, 'pipeline', verifier, { status: 'reviewed', findings: 0 })
 
   // then
   // ... the ticket is pr_open with its url kept and restarts back at 0, and no fixer is to be started
@@ -233,7 +218,7 @@ test('a verifier reporting findings moves the ticket to fix', async () => {
 
   // when
   // ... its verifier reports two findings
-  const r = await report(run, db, 'pipeline', verifier, { status: 'reviewed', findings: 2 }, 3)
+  const r = await report(run, db, 'pipeline', verifier, { status: 'reviewed', findings: 2 })
 
   // then
   // ... the ticket stays in progress at stage fix, and the fixer is to be started
@@ -248,7 +233,7 @@ test('a fixer reporting the PR opens it', async () => {
 
   // when
   // ... its fixer reports the PR
-  const r = await report(run, db, 'pipeline', fixer, { status: 'pr_open', pr_url: 'https://github.com/o/r/pull/7' }, 3)
+  const r = await report(run, db, 'pipeline', fixer, { status: 'pr_open', pr_url: 'https://github.com/o/r/pull/7' })
 
   // then
   // ... the ticket is pr_open with restarts back at 0, not sent back to review
@@ -264,7 +249,7 @@ test('a blocked fixer sends the ticket to needs_human with its question', async 
 
   // when
   // ... its fixer reports blocked
-  await report(run, db, 'pipeline', fixer, { status: 'blocked', question: 'Which finding wins?' }, 3)
+  await report(run, db, 'pipeline', fixer, { status: 'blocked', question: 'Which finding wins?' })
 
   // then
   // ... the ticket waits on a human with the question and restarts back at 0
@@ -279,7 +264,7 @@ test('a report from an agent whose stage the ticket has left is not recorded', a
 
   // when
   // ... its verifier reports again
-  const r = await report(run, db, 'pipeline', verifier, { status: 'reviewed', findings: 0 }, 3)
+  const r = await report(run, db, 'pipeline', verifier, { status: 'reviewed', findings: 0 })
 
   // then
   // ... nothing changed and the log names the stage found
@@ -296,7 +281,7 @@ test('a reviewer calling report_result is refused', async () => {
 
   // when
   // ... a reviewer reports a PR
-  const r = await report(run, db, 'pipeline', reviewer, { status: 'pr_open', pr_url: 'https://github.com/o/r/pull/7' }, 3)
+  const r = await report(run, db, 'pipeline', reviewer, { status: 'pr_open', pr_url: 'https://github.com/o/r/pull/7' })
 
   // then
   // ... the call is refused and the row is unchanged

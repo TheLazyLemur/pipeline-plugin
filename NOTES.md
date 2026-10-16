@@ -20,8 +20,9 @@ Things SPEC.md does not settle. Everything else the build decided is described i
    a report and the next stage's agents.
 7. **Tickets started before stages are not reviewed.** A null stage is read as `implement`, but an implementer with
    a null stage was not told to open a draft, so its PR goes straight to `pr_open` whatever its difficulty.
-8. **A routing.md without `Review threshold:` reviews from 3**, so no re-setup is needed after a pull. A malformed
-   value fails the pass instead. There is no "off": a threshold above 5 never reviews.
+8. **A routing.md without `Review size:` reviews from 300 lines changed**, so no re-setup is needed after a pull; a
+   leftover `Review threshold:` line is ignored. A malformed value fails the pass instead. There is no "off": every
+   PR that crosses a surface is reviewed.
 9. **Reviewers are read-only by prompt plus `disallowedTools: Write, Edit, NotebookEdit`**; they still have Bash,
    which they need for git.
 10. **The pipeline.db guard is a text match on Bash commands.** Any Bash command of a pipeline agent that contains

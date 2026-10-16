@@ -46,17 +46,16 @@ const world = (on: On) => {
 
 /** A fresh pipeline.db holding T-1 in progress at implement; shortcut: one row in memory, since the kit runs no sqlite3. */
 const pipelineDb = (on: On) => {
-  const row = { ticket_id: 'T-1', status: 'in_progress', stage: 'implement', difficulty: 1, pr_url: null as string | null }
+  const row = { ticket_id: 'T-1', status: 'in_progress', stage: 'implement', started: 1, pr_url: null as string | null }
   const out = (exitCode: number, stdout: string) => ({ value: { exitCode, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
   on('process.run', async (_, e) => {
     if (e.argv[0] === 'test') return out(1, '') // no .claude/pipeline at session start: nothing to migrate
-    if (e.argv[0] === 'cat') return out(1, '') // no routing.md: review from difficulty 3
     expect(e.argv.slice(0, 6)).toEqual(['sqlite3', '-bail', '-json', '-cmd', '.timeout 5000', DB])
     const statement = e.argv.at(-1) ?? ''
-    if (statement === "select difficulty, stage from tickets where ticket_id = 'T-1'") return out(0, JSON.stringify([row]))
-    const set = statement.match(/^update tickets set status = '(\w+)', restarts = 0, pr_url = '([^']+)' where ticket_id = 'T-1' and status = 'in_progress' and coalesce\(stage, 'implement'\) = 'implement' returning ticket_id$/)
+    if (statement === "select stage from tickets where ticket_id = 'T-1'") return out(0, JSON.stringify([row]))
+    const set = statement.match(/^update tickets set stage = '(\w+)', started = 0, pr_url = '([^']+)' where ticket_id = 'T-1' and status = 'in_progress' and coalesce\(stage, 'implement'\) = 'implement' returning ticket_id$/)
     expect(set, `an unexpected statement: ${statement}`).not.toBeNull()
-    Object.assign(row, { status: set?.[1], pr_url: set?.[2] })
+    Object.assign(row, { stage: set?.[1], started: 0, pr_url: set?.[2] })
     return out(0, JSON.stringify([{ ticket_id: 'T-1' }]))
   })
   return row
@@ -94,10 +93,10 @@ test(
     await clock.advance(10_000)
 
     // then
-    // ... the agent was spawned by pipeline, pipeline-agents' hook answered and logged it, and T-1 moved to pr_open
+    // ... the agent was spawned by pipeline, pipeline-agents' hook answered and logged it, and T-1 moved to review for the loop to decide
     expect(agents).toMatchObject([{ description: 'pipeline T-1', spawnedBy: 'pipeline' }])
-    expect(logs).toEqual([`T-1 has a PR: ${PR}`, 'answer {"result":"Recorded."}'])
-    expect(row).toMatchObject({ status: 'pr_open', pr_url: PR })
+    expect(logs).toEqual([`T-1 has a draft PR: ${PR}`, 'answer {"result":"Recorded."}'])
+    expect(row).toMatchObject({ status: 'in_progress', stage: 'review', started: 0, pr_url: PR })
   },
 )
 
