@@ -11,6 +11,9 @@ export const GUARDED = ['Edit', 'Write', 'NotebookEdit', 'Bash'] as const
 const TICKET = /^[\w.@+-]+$/
 const bad = (part: string, strict: boolean) => part === '' || part === '.' || part === '..' || part.includes('/') || (strict && !TICKET.test(part))
 
+/** Whether `ticket` can name a worktree, so `worktreeOf` will not throw on it. */
+export const namesWorktree = (ticket: string) => !bad(ticket, true)
+
 /** The worktree of `role` for `ticket` of the project at `root`; throws on a ticket id or project name that cannot be one path segment. */
 export const worktreeOf = (home: string, root: string, ticket: string, role: Role): string => {
   const project = root.replace(/\/+$/, '').split('/').pop() ?? ''

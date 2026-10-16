@@ -256,6 +256,27 @@ test('a ticket whose implementer is gone without a result goes to needs_human, n
   assert.deepEqual(spawned, [])
 })
 
+test('a ready ticket whose id cannot name a worktree goes to needs_human unclaimed, and the next one is started', async () => {
+  // given
+  // ... a ready ticket whose id holds a slash, then a ready ticket with a valid id
+  const { run, db } = await freshProject()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, model, difficulty) values ('org/repo#7', 'one', 'ready', 'opus', 1), ('T-2', 'two', 'ready', 'sonnet', 1)`)
+  const { d, spawned } = deps(run, [])
+
+  // when
+  // ... a pass runs
+  const log = await pass(d)
+
+  // then
+  // ... the bad id waits on a human with a question naming it and no owner, and only the next ticket is claimed and spawned
+  const [bad] = await sql(run, db, `select status, owner, question from tickets where ticket_id = 'org/repo#7'`)
+  assert.deepEqual([bad?.status, bad?.owner], ['needs_human', null])
+  assert.match(String(bad?.question), /"org\/repo#7" cannot name a worktree: the tracker's ids must be one path segment/)
+  assert.deepEqual(await sql(run, db, `select status from tickets where ticket_id = 'T-2'`), [{ status: 'in_progress' }])
+  assert.deepEqual(spawned.map(s => s.description), ['pipeline T-2'])
+  assert.match(log.join('\n'), /org\/repo#7 needs you: its id cannot name a worktree/)
+})
+
 test('a refused spawn puts the ticket back to ready, unowned', async () => {
   // given
   // ... a ready ticket and spawns being refused

@@ -46,7 +46,9 @@ One pass of the loop (`src/loop.ts`), in order:
 5. Spawn: if no ticket is in_progress (at any stage, in any session), claim the oldest ready one and spawn its
    implementer at stage `implement`, telling it whether to open the PR as a draft. The claim is one guarded
    update that sets the owner; a pass whose claim gets no row back (another pass won it) spawns nothing. If the
-   spawn is denied, the ticket goes back to ready and the loop retries next pass.
+   spawn is denied, the ticket goes back to ready and the loop retries next pass. Before the claim, a ready ticket
+   whose id cannot name a worktree (not one path segment) goes to needs_human with a question naming the id, and
+   the pass claims the next ready one.
 6. Never wait on a human. Anything that needs one is set to needs_human with the question, and the loop
    moves on.
 
@@ -181,7 +183,7 @@ notice of those agents, which would start a turn on the main thread; you still s
 
 ### Needing you
 A ticket goes to needs_human when triage finds it not ready (missing acceptance criteria, open questions),
-the implementer is blocked or ends without a result, an agent is hard-stopped at its limit, or its implementer
+the implementer is blocked or ends without a result, its id cannot name a worktree, an agent is hard-stopped at its limit, or its implementer
 disappears. The question is stored on
 the ticket. `/pipeline-status` in your session lists them; your answer is saved as a comment on the tracker
 ticket and it goes back to new or ready.
