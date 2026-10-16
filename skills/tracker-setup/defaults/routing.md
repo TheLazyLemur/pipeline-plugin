@@ -12,7 +12,7 @@ Security-critical work (auth, payments, secrets, permissions, crypto) goes to fa
 
 ## Review
 
-Tickets at or above this difficulty open as a `Draft: ` PR and are reviewed by agents one model tier up before
+Tickets at or above this difficulty open as a `Draft: ` PR and are reviewed by agents on opus before
 you see them. Raise it above 5 to turn agent review off.
 
 Review threshold: 3
