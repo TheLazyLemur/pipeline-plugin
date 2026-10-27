@@ -22,7 +22,7 @@ prompt changed since session start, the loop logs `agent prompts changed (<files
 them`.
 
 The plugin needs `python3` on the `PATH`: the implementer and fixer write every PR with the
-`pipeline:writing-pull-requests` skill, and its `scripts/pr.py` runs under `python3`.
+`pipeline:writing-pull-requests` skill, and its `scripts/pr.py` runs under `python3`. Notifications need `curl`.
 
 Then, in your project:
 
@@ -34,6 +34,11 @@ Then, in your project:
 
 Once `/pipeline:tracker-setup` has run, the loop starts with the session: the first pass runs 10 seconds after start,
 then one pass every 5 minutes. Pipeline state lives in `.claude/pipeline/pipeline.db`.
+
+To get a push notification through [ntfy](https://ntfy.sh) when a ticket needs you, its PR is ready for review, or
+its PR merged, put the topic URL in `.claude/pipeline/ntfy-url` (for example
+`https://ntfy.home.opsbox.co.za/agent-notifications`). Each pass reads it, so adding, changing or removing it needs no
+restart; without it, nothing is sent.
 
 ## One loop pass
 
@@ -64,6 +69,7 @@ flowchart TD
     fixer -. blocked .-> nh
     nh --> you[You answer in /pipeline:pipeline-status]
     you -- "back to new or ready" --> triage
+    nh & open --> notify([End of pass: ntfy for each ticket newly needs_human, pr_open or done])
 ```
 
 The loop never waits on a human: anything it cannot decide is set to `needs_human` with its question, and the

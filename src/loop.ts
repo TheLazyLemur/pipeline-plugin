@@ -3,6 +3,7 @@ import { ROLES, type Role, TAG, agentOf } from '../pipeline-agents/src/agents.ts
 import { worktreeOf } from '../pipeline-agents/src/guards.ts'
 import { reviewFrom } from '../pipeline-agents/src/routing.ts'
 import { DB, type Run, type Stage, type Ticket, lit, migrate, sql } from '../pipeline-agents/src/store.ts'
+import { forgetLeft, notify } from './notify.ts'
 import { closeMerged, sync } from './sync.ts'
 import { type Complete, MODELS, REVIEW_MODEL, triage } from './triage.ts'
 
@@ -74,7 +75,7 @@ const read = async (run: Run, name: string) => {
   return r.exitCode === 0 ? r.stdout : null
 }
 
-/** One pass: mark merged PRs done and sync (a tracker failure is logged and the pass goes on), triage every new ticket, move each in_progress ticket this session owns on, send those of a stopped session to a human, claim and spawn the implementer for the next ready one if none is in progress. Resolves what to log. */
+/** One pass: mark merged PRs done and sync (a tracker failure is logged and the pass goes on), triage every new ticket, move each in_progress ticket this session owns on, send those of a stopped session to a human, claim and spawn the implementer for the next ready one if none is in progress, then notify the user of each ticket that came to need them. Resolves what to log. */
 export const pass = async (d: Deps): Promise<string[]> => {
   const [tracker, readiness, rubric, routing] = await Promise.all([
     read(d.run, 'tracker'),
@@ -84,6 +85,12 @@ export const pass = async (d: Deps): Promise<string[]> => {
   ])
   if (tracker === null || readiness === null || rubric === null || routing === null) return [`no .claude/pipeline setup here; run /tracker-setup`]
   await migrate(d.run, DB)
+  await forgetLeft(d.run)
+  const log = await work(d, { tracker, readiness, rubric, routing })
+  return [...log, ...(await notify(d.run))]
+}
+
+const work = async (d: Deps, { tracker, readiness, rubric, routing }: Record<'tracker' | 'readiness' | 'rubric' | 'routing', string>): Promise<string[]> => {
   // heartbeat first, so a pass that fails later still shows this session alive; a ticket from before owners is
   // adopted, so the stage rules below apply to it as they did then
   await sql(d.run, DB, `update tickets set owner = coalesce(owner, ${lit(d.session)}), owner_seen = datetime('now') where status = 'in_progress' and (owner is null or owner = ${lit(d.session)})`)

@@ -40,7 +40,7 @@ test('a database made before the body column gains it, keeping its rows', async 
   // given
   // ... a tickets table without body, holding a ticket
   const db = join(mkdtempSync(join(tmpdir(), 'pipeline-')), 'pipeline.db')
-  await sql(run, db, `create table tickets (ticket_id text primary key, title text not null); insert into tickets values ('T-1', 'one')`)
+  await sql(run, db, `create table tickets (ticket_id text primary key, title text not null, status text not null default 'new'); insert into tickets (ticket_id, title) values ('T-1', 'one')`)
 
   // when
   // ... it is migrated twice, as every loop pass does

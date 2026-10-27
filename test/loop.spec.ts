@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { test } from 'node:test'
@@ -48,6 +50,26 @@ const sqliteTracker = async (run: Run, root: string, fill: string, merged: strin
   writeFileSync(join(root, 'merged.txt'), merged.map(url => `${url}\n`).join(''))
   const sections = Object.entries(COMMANDS).filter(([h]) => h !== omit)
   writeFileSync(join(root, '.claude/pipeline/tracker.md'), sections.map(([h, cmd]) => `## ${h}\n\`\`\`sh\n${cmd}\n\`\`\`\n`).join(''))
+}
+
+type Sent = { path: string | undefined; title: string | undefined; tags: string | undefined; click: string | undefined; body: string }
+
+/** A local ntfy that answers `status` (changeable between passes) and records each POST; the project's ntfy-url points at it. */
+const ntfy = async (root: string) => {
+  const server = { status: 200, sent: [] as Sent[] }
+  const http = createServer((req, res) => {
+    let body = ''
+    req.on('data', chunk => (body += chunk))
+    req.on('end', () => {
+      server.sent.push({ path: req.url, title: req.headers.title as string | undefined, tags: req.headers.tags as string | undefined, click: req.headers.click as string | undefined, body })
+      res.statusCode = server.status
+      res.end()
+    })
+  })
+  await new Promise<void>(resolve => http.listen(0, '127.0.0.1', resolve))
+  http.unref()
+  writeFileSync(join(root, '.claude/pipeline/ntfy-url'), `http://127.0.0.1:${(http.address() as AddressInfo).port}/agent-notifications\n`)
+  return server
 }
 
 test('a merged PR marks its ticket done in the tracker and the table', async () => {
@@ -564,4 +586,131 @@ test('a pass stamps owner_seen on the tickets its session owns', async () => {
   // then
   // ... it was seen within the last minute and is still in progress
   assert.deepEqual(await sql(run, db, `select status, owner_seen > datetime('now', '-1 minute') as fresh from tickets`), [{ status: 'in_progress', fresh: 1 }])
+})
+
+for (const [status, title, body, click] of [
+  ['needs_human', 'T-1 needs you', /one\n\nWhich colour\?/, 'https://tracker/T-1'],
+  ['pr_open', 'T-1: PR ready for review', /one\nhttps:\/\/git\/pr\/1/, 'https://git/pr/1'],
+  ['done', 'T-1: PR merged', /one\nhttps:\/\/git\/pr\/1/, 'https://git/pr/1'],
+] as const) {
+  test(`a ticket entering ${status} is notified on ntfy`, async () => {
+    // given
+    // ... ntfy configured, and a ticket that has just entered ${status}
+    const { run, db, root } = await freshProject()
+    const server = await ntfy(root)
+    await sql(run, db, `insert into tickets (ticket_id, title, url, status, question, pr_url) values ('T-1', 'one', 'https://tracker/T-1', ${lit(status)}, 'Which colour?', 'https://git/pr/1')`)
+
+    // when
+    // ... a pass runs
+    await pass(deps(run, [live('pipeline T-1')]).d)
+
+    // then
+    // ... one notification went to the topic, titled for the state, linking the ticket or PR
+    assert.equal(server.sent.length, 1)
+    assert.equal(server.sent[0]?.path, '/agent-notifications')
+    assert.equal(server.sent[0]?.title, title)
+    assert.equal(server.sent[0]?.click, click)
+    assert.match(server.sent[0]?.body ?? '', body)
+  })
+}
+
+test('a notified ticket is not notified again on the next pass', async () => {
+  // given
+  // ... ntfy configured, and a ticket waiting on a human, notified by one pass
+  const { run, db, root } = await freshProject()
+  const server = await ntfy(root)
+  await sql(run, db, `insert into tickets (ticket_id, title, status, question) values ('T-1', 'one', 'needs_human', 'Which colour?')`)
+  await pass(deps(run, []).d)
+
+  // when
+  // ... another pass runs
+  await pass(deps(run, []).d)
+
+  // then
+  // ... only the first pass sent it
+  assert.equal(server.sent.length, 1)
+})
+
+test('a ticket answered and sent back to needs_human is notified again', async () => {
+  // given
+  // ... ntfy configured, and a notified needs_human ticket the user answered, back to new
+  const { run, db, root } = await freshProject()
+  const server = await ntfy(root)
+  await sql(run, db, `insert into tickets (ticket_id, title, status, question) values ('T-1', 'one', 'needs_human', 'Which colour?')`)
+  await pass(deps(run, []).d)
+  await sql(run, db, `update tickets set status = 'new', question = null`)
+  const { d } = deps(run, [])
+  d.complete = async () =>
+    ({ isAnswered: true, text: '{"ready": false, "question": "Which shade?", "difficulty": 2, "confidence": 0.5, "model": "sonnet", "reason": "unclear"}' }) as ModelCompleteResult
+
+  // when
+  // ... a pass triages it back to needs_human
+  await pass(d)
+
+  // then
+  // ... the new question is sent too
+  assert.equal(server.sent.length, 2)
+  assert.match(server.sent[1]?.body ?? '', /Which shade\?/)
+})
+
+test('a database made before notifications gains the column and sends nothing for the state it already holds', async () => {
+  // given
+  // ... ntfy configured, and a tickets table without notified_status holding a ticket in each notified state
+  const { run, db, root } = await freshProject()
+  const server = await ntfy(root)
+  await sql(run, db, `drop table tickets; create table tickets (ticket_id text primary key, title text not null, url text, body text,
+    status text not null default 'new', question text, difficulty integer, confidence real, model text, reason text, pr_url text,
+    learned integer not null default 0); insert into tickets (ticket_id, title, status, question, pr_url) values
+    ('T-1', 'one', 'needs_human', 'Which colour?', null), ('T-2', 'two', 'pr_open', null, 'https://git/pr/2'), ('T-3', 'three', 'done', null, 'https://git/pr/3')`)
+
+  // when
+  // ... a pass runs
+  await pass(deps(run, []).d)
+
+  // then
+  // ... nothing was sent, and each ticket is marked notified for its status
+  assert.deepEqual(server.sent, [])
+  assert.deepEqual(await sql(run, db, `select notified_status from tickets order by rowid`), [
+    { notified_status: 'needs_human' },
+    { notified_status: 'pr_open' },
+    { notified_status: 'done' },
+  ])
+})
+
+test('a failed notification is logged, does not fail the pass, and is sent on the next pass', async () => {
+  // given
+  // ... ntfy answering 500, and a ticket waiting on a human
+  const { run, db, root } = await freshProject()
+  const server = await ntfy(root)
+  server.status = 500
+  await sql(run, db, `insert into tickets (ticket_id, title, status, question) values ('T-1', 'one', 'needs_human', 'Which colour?')`)
+  const log = await pass(deps(run, []).d)
+  server.status = 200
+
+  // when
+  // ... another pass runs with ntfy back
+  await pass(deps(run, []).d)
+
+  // then
+  // ... the first pass logged the failure, and the second sent it again and marked it notified
+  assert.match(log.join('\n'), /T-1 notification failed: /)
+  assert.equal(server.sent.length, 2)
+  assert.deepEqual(await sql(run, db, `select notified_status from tickets`), [{ notified_status: 'needs_human' }])
+})
+
+test('without an ntfy-url nothing is sent, and adding one later does not send what happened before', async () => {
+  // given
+  // ... no ntfy-url, and a ticket waiting on a human, passed over once
+  const { run, db, root } = await freshProject()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, question) values ('T-1', 'one', 'needs_human', 'Which colour?')`)
+  await pass(deps(run, []).d)
+  const server = await ntfy(root)
+
+  // when
+  // ... a pass runs with ntfy configured
+  await pass(deps(run, []).d)
+
+  // then
+  // ... nothing was sent
+  assert.deepEqual(server.sent, [])
 })

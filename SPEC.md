@@ -47,7 +47,15 @@ One pass of the loop (`src/loop.ts`), in order:
    implementer at stage `implement`, telling it whether to open the PR as a draft. The claim is one guarded
    update that sets the owner; a pass whose claim gets no row back (another pass won it) spawns nothing. If the
    spawn is denied, the ticket goes back to ready and the loop retries next pass.
-6. Never wait on a human. Anything that needs one is set to needs_human with the question, and the loop
+6. Notify: each ticket that entered `needs_human` (with its question), `pr_open` (its PR is ready for review) or
+   `done` (its PR merged) since it was last notified gets one ntfy notification (`src/notify.ts`), whichever code
+   moved it. Its `notified_status` records the status sent; a ticket that leaves those statuses has it reset at the
+   start of the next pass, so returning to one notifies again. The topic URL is read each pass from
+   `.claude/pipeline/ntfy-url`; without it nothing is sent and tickets are marked notified, so adding it later sends
+   nothing old. The post is `curl` with a 5 second limit, a `Title`, `Tags` and `Click` (the ticket's URL for
+   needs_human, the PR's otherwise) header and the ticket title plus the question or PR URL as body. A failed post
+   logs "<ticket> notification failed: <reason>", leaves the marker and is retried next pass.
+7. Never wait on a human. Anything that needs one is set to needs_human with the question, and the loop
    moves on.
 
 ### The tracker.md command contract
@@ -223,6 +231,7 @@ Holds pipeline status. The tracker owns the ticket itself; SQLite holds our fiel
 | reason | why the score / why not ready |
 | pr_url | |
 | learned | whether /learn has processed the PR |
+| notified_status | the status the loop last sent a notification for; set to `status` on existing rows when the column is added, so nothing is sent for them |
 
 A `turn.complete` hook in `pipeline-agents` adds one row to the `turns` table per finished turn of a pipeline
 agent, or of an agent one spawned (an Agent call, a fork, found up `parentId`), which counts against that pipeline

@@ -31,6 +31,8 @@ export type Ticket = {
   reason: string | null
   pr_url: string | null
   learned: 0 | 1
+  /** The status the loop last sent a notification for, or passed over without one. */
+  notified_status: Status | null
 }
 
 export const DB = '.claude/pipeline/pipeline.db'
@@ -53,7 +55,8 @@ export const SCHEMA = `create table if not exists tickets (
   model text check (model in ('haiku', 'sonnet', 'opus', 'fable')),
   reason text,
   pr_url text,
-  learned integer not null default 0 check (learned in (0, 1))
+  learned integer not null default 0 check (learned in (0, 1)),
+  notified_status text
 );
 create table if not exists turns (
   ticket_id text not null,
@@ -117,11 +120,15 @@ const ADDED: Record<string, string> = {
   owner: 'text',
   owner_seen: 'text',
   restarts: 'integer not null default 0 check (restarts in (0, 1))',
+  notified_status: 'text',
 }
+
+/** What an added column starts as on the rows already there, when not its default: no notification for the state they hold. */
+const BACKFILL: Record<string, string> = { notified_status: 'status' }
 
 /** Applies SCHEMA, and adds the columns a database made before them is missing. */
 export const migrate = async (run: Run, db: string) => {
   await sql(run, db, SCHEMA)
   const have = (await sql(run, db, `select name from pragma_table_info('tickets')`)).map(c => c.name)
-  for (const [name, def] of Object.entries(ADDED)) if (!have.includes(name)) await sql(run, db, `alter table tickets add column ${name} ${def}`)
+  for (const [name, def] of Object.entries(ADDED)) if (!have.includes(name)) await sql(run, db, `alter table tickets add column ${name} ${def}; ${name in BACKFILL ? `update tickets set ${name} = ${BACKFILL[name]}` : ''}`)
 }
