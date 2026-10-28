@@ -1,10 +1,10 @@
 import type { AgentInfo, AgentSpawnArgs, AgentSpawnResult } from 'claude-code'
 import { ROLES, type Role, TAG, agentOf } from '../pipeline-agents/src/agents.ts'
 import { worktreeOf } from '../pipeline-agents/src/guards.ts'
-import { reviewFrom } from '../pipeline-agents/src/routing.ts'
+import { reviewFrom, stackDepth } from '../pipeline-agents/src/routing.ts'
 import { DB, type Run, type Stage, type Ticket, lit, migrate, sql } from '../pipeline-agents/src/store.ts'
 import { forgetLeft, notify } from './notify.ts'
-import { closeMerged, sync } from './sync.ts'
+import { closeMerged, restack, sync } from './sync.ts'
 import { type Complete, MODELS, REVIEW_MODEL, triage } from './triage.ts'
 
 export type Deps = {
@@ -75,7 +75,7 @@ const read = async (run: Run, name: string) => {
   return r.exitCode === 0 ? r.stdout : null
 }
 
-/** One pass: mark merged PRs done and sync (a tracker failure is logged and the pass goes on), triage every new ticket, move each in_progress ticket this session owns on, send those of a stopped session to a human, claim and spawn the implementer for the next ready one if none is in progress, then notify the user of each ticket that came to need them. Resolves what to log. */
+/** One pass: mark merged PRs done, bring stacked PRs up to date and sync (a tracker failure is logged and the pass goes on), triage every new ticket, move each in_progress ticket this session owns on, send those of a stopped session to a human, claim and spawn the implementer for the next ready one if none is in progress, then notify the user of each ticket that came to need them. Resolves what to log. */
 export const pass = async (d: Deps): Promise<string[]> => {
   const [tracker, readiness, rubric, routing] = await Promise.all([
     read(d.run, 'tracker'),
@@ -98,20 +98,22 @@ const work = async (d: Deps, { tracker, readiness, rubric, routing }: Record<'tr
   const live = (await d.agents()).filter(a => LIVE.includes(a.status))
 
   // 1. a merged PR marks its ticket done before sync, so dependents it was holding are released in this pass
-  // 2. sync, so what it adds is triaged in this pass
+  // 2. stacked PRs are brought up to date with the PRs under them, bottom first
+  // 3. sync, so what it adds is triaged in this pass
   // a tracker that fails or times out (a laptop waking from sleep) must not hold up the tickets already in the table
   const done: string[] = []
   try {
-    const closed = await closeMerged(d.run, DB, tracker)
-    for (const id of closed) log.push(`${id} is done: its PR merged`)
-    done.push(...closed, ...(await sync(d.run, DB, tracker)))
+    const depth = stackDepth(routing)
+    const merged = await closeMerged(d.run, DB, tracker)
+    log.push(...merged.log, ...(await restack(d.run, DB, tracker, depth)))
+    done.push(...merged.done, ...(await sync(d.run, DB, tracker, depth)))
   } catch (err) {
     log.push(`tracker unreachable: ${(err as Error).message}`)
   }
   // a done ticket's agents are gone, however it got there: whatever worktree one left behind goes
   for (const id of done) log.push(...(await removeWorktrees(d, id)))
 
-  // 3. triage; a failed ticket stays new and is retried next pass
+  // 4. triage; a failed ticket stays new and is retried next pass
   const fresh = (await sql(d.run, DB, `select ticket_id, title, url, body from tickets where status = 'new' order by rowid`)) as Ticket[]
   for (const t of fresh) {
     try {
@@ -122,7 +124,7 @@ const work = async (d: Deps, { tracker, readiness, rubric, routing }: Record<'tr
     }
   }
 
-  // 4. only the owner moves a ticket on: $.agent.list() sees this session's agents alone. Another session's ticket
+  // 5. only the owner moves a ticket on: $.agent.list() sees this session's agents alone. Another session's ticket
   // counts toward the one-at-a-time limit while its owner is seen, and goes to a human once it is not.
   // A stage with no agent of its ticket still live moves on: a stage report_result entered gets its agents started
   // here, since only this plugin's spawns are heard by pipeline-agents (docs/adr/0001); finished reviewers hand over
@@ -164,7 +166,12 @@ const work = async (d: Deps, { tracker, readiness, rubric, routing }: Record<'tr
   // one ticket at a time: no new implementer while any ticket is at any stage
   if (waiting > 0) return log
 
-  const [next] = (await sql(d.run, DB, `select ticket_id, title, url, model, difficulty from tickets where status = 'ready' order by rowid limit 1`)) as Ticket[]
+  const [next] = (await sql(
+    d.run,
+    DB,
+    `select t.ticket_id, t.title, t.url, t.model, t.difficulty, b.pr_url as stack_on from tickets t left join tickets b on b.ticket_id = t.stacked_on
+     where t.status = 'ready' order by t.rowid limit 1`,
+  )) as (Ticket & { stack_on: string | null })[]
   if (next === undefined) return log
   if (!MODELS.includes(next.model as (typeof MODELS)[number])) throw new Error(`${next.ticket_id} is ready with no routed model: ${next.model}`)
   if (next.difficulty === null) throw new Error(`${next.ticket_id} is ready with no difficulty`)
@@ -181,7 +188,7 @@ const work = async (d: Deps, { tracker, readiness, rubric, routing }: Record<'tr
   const s = await d.spawn({
     description: `${TAG} ${next.ticket_id}`,
     subagentType: `${d.plugin}:implementer-${next.model}`,
-    prompt: `Ticket ${next.ticket_id}: ${next.title}\n${next.url ?? ''}\n${worktreeLine(d, next.ticket_id, 'implementer')}\n\n${
+    prompt: `Ticket ${next.ticket_id}: ${next.title}\n${next.url ?? ''}\n${worktreeLine(d, next.ticket_id, 'implementer')}\n${next.stack_on === null ? '' : `Stack on: ${next.stack_on}\n`}\n${
       draft ? 'Open the PR as a draft on the host, with the title prefix "Draft: ": agents review it before the user does.' : 'Open the PR without a "Draft: " title prefix.'
     }`,
   })

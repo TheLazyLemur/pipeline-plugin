@@ -22,3 +22,6 @@ export const reviewFrom = (routing: string): number => whole(routing, 'Review th
 export type Limits = { tokens: number; minutes: number }
 
 export const limitsFrom = (routing: string): Limits => ({ tokens: whole(routing, 'Agent token limit', 500_000), minutes: whole(routing, 'Agent time limit', 120) })
+
+/** The most unmerged PRs a stack may hold, counting its bottom one, from routing.md's `Stack depth: <n>` line; 1 is no stacking. */
+export const stackDepth = (routing: string): number => whole(routing, 'Stack depth', 1)
