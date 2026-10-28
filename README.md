@@ -47,9 +47,13 @@ flowchart TD
     start([Timer fires]) --> setup{"Is .claude/pipeline set up?"}
     setup -- no --> stop(["Log: run /tracker-setup"])
     setup -- yes --> merged[Each pr_open ticket whose PR merged: mark done in the tracker and the table]
-    merged --> sync[Sync: pull new and changed tickets from the tracker]
+    merged --> restack[Stack depth above 1: bring each pr_open stacked PR up to date, bottom first]
+    restack --> sync[Sync: pull new and changed tickets from the tracker]
     sync --> held{Blocker not done?}
-    held -- yes --> hold([Ticket held out of the table until its blocker is done])
+    held -- yes --> stackable{"Stack depth above 1, only blocker pr_open, room in its stack?"}
+    stackable -- no --> hold([Ticket held out of the table until its blocker is done])
+    stackable -- yes --> stacked[Pulled in stacked on its blocker's PR]
+    stacked --> triage
     held -- no --> triage[Triage every new ticket with Haiku]
     triage --> verdict{Ready?}
     verdict -- no --> nh[needs_human: question stored on the ticket]
@@ -65,6 +69,8 @@ flowchart TD
     verifier -- none left --> open
     verifier -- findings --> fixer[Fixer on the routed model fixes them on the same PR]
     fixer --> open
+    merged -. PR closed unmerged .-> nh
+    restack -. conflict .-> nh
     impl -. blocked .-> nh
     fixer -. blocked .-> nh
     nh --> you[You answer in /pipeline:pipeline-status]
@@ -79,7 +85,11 @@ whose owning session has stopped: several sessions may load the pipeline on one
 project, and each moves on only the tickets it claimed. Agent review is one round only; the `Draft: ` prefix comes off the PR title when it is done.
 A ticket blocked by another in the tracker is held until its blocker is done; marking merged PRs done before
 sync releases it in the same pass, so it is built on its blocker's merged code. `/pipeline:pipeline-status`
-lists held tickets and what holds each.
+lists held tickets and what holds each. With `Stack depth: <n>` above 1 in routing.md and the two stacked PR sections
+in tracker.md (`/pipeline:tracker-setup` asks), a ticket whose only unfinished blocker has its PR open for you starts
+early instead, on a PR stacked on its blocker's, up to n unmerged PRs per stack; each pass brings open stacked PRs up
+to date with the PR under them, and a PR closed without merging sends its ticket and those stacked on it to you
+(`docs/specs/stacked-prs.md`).
 
 ## Tests
 

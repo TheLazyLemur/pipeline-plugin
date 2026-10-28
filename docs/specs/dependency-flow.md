@@ -69,7 +69,7 @@ None from the discussion.
 ## Out of Scope
 
 - Inferring dependencies from ticket text.
-- Stacked PRs (branching a dependent from its blocker's unmerged branch).
+- Stacked PRs (branching a dependent from its blocker's unmerged branch): opt-in since, see `docs/specs/stacked-prs.md`.
 - Flagging blockers that never merge; they are only visible in `/pipeline-status`.
 - Any gate on independent tickets, such as "one PR open at a time".
 - Rebasing open PRs when `main` moves.

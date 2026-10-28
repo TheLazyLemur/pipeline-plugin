@@ -56,3 +56,14 @@ Things SPEC.md does not settle. Everything else the build decided is described i
     in case on a case-insensitive filesystem (macOS by default: `/Users/x/Code/app` for `/Users/x/code/app`), and a
     subshell's `cd` is taken to persist. Only the main checkout is protected: a worktree of another ticket or any
     other folder on disk is not.
+15. **Stacked PRs on GitHub: `gh stack link` has no `--auto`, and `--open` marks every PR in the stack ready**, the
+    blocker's included. So `/tracker-setup` suggests `gh pr create --base <blocker head branch>` (`--draft` per the
+    draft rule), then `gh stack link <blocker PR> <new PR>` without `--open`. The suggested up-to-date script runs
+    `gh pr update-branch` only on `mergeStateStatus` `BEHIND` (and fails on `DIRTY`); unchecked whether GitHub
+    reports `BEHIND` for a base that is an unprotected feature branch. If it reports `CLEAN`, the script never
+    updates a stacked PR; comparing `behind_by` through `gh api repos/{owner}/{repo}/compare/<base>...<head>` would
+    not depend on it. Switch?
+16. **A closed PR leaves a stacked ticket already in needs_human with its own question**, rather than overwriting it
+    with the closed-PR one. An up-to-date command that times out (`$.process.run` rejects) is logged as "tracker
+    unreachable" like any tracker command, not sent to needs_human: a timeout is more likely the host than a
+    conflict.

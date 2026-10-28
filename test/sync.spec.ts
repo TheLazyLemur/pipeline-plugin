@@ -108,3 +108,112 @@ test('a tracker.md without the blockers command is refused', async () => {
   // ... it fails naming the missing section
   await assert.rejects(synced, /no command under "## List the blockers"/)
 })
+
+/** The tracker.md sections stacking needs, after the sync commands. */
+const stacking = `## Open a stacked PR
+Find the blocker PR's head branch, branch from it, open the PR on it.
+## Bring a stacked PR up to date
+\`\`\`sh
+true
+\`\`\`
+`
+
+/** Ticket 2 waiting, blocked by the tickets in `by`, none done. */
+const dependent = (by: number[]) =>
+  tracker([{ id: 2, title: 'two', url: null, body: null }], [], by.map(b => ({ id: 2, blocked_by: b, blocker_done: false }))) + stacking
+
+test('with stacking on, a ticket whose only unfinished blocker has its PR open is pulled in stacked on it', async () => {
+  // given
+  // ... ticket 1 pr_open and ticket 2 blocked by it alone, at stack depth 2
+  const db = await freshDb()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, pr_url) values ('1', 'one', 'pr_open', 'https://git/pr/1')`)
+
+  // when
+  // ... sync runs
+  await sync(run, db, dependent([1]), 2)
+
+  // then
+  // ... ticket 2 is new, stacked on ticket 1
+  assert.deepEqual(await sql(run, db, `select ticket_id, status, stacked_on from tickets order by rowid`), [
+    { ticket_id: '1', status: 'pr_open', stacked_on: null },
+    { ticket_id: '2', status: 'new', stacked_on: '1' },
+  ])
+})
+
+test('with stacking on, a ticket is held while its blocker is still in progress', async () => {
+  // given
+  // ... ticket 1 in_progress with a PR under agent review, and ticket 2 blocked by it
+  const db = await freshDb()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, pr_url) values ('1', 'one', 'in_progress', 'https://git/pr/1')`)
+
+  // when
+  // ... sync runs at stack depth 2
+  await sync(run, db, dependent([1]), 2)
+
+  // then
+  // ... ticket 2 is not in the table
+  assert.deepEqual(await sql(run, db, `select ticket_id from tickets`), [{ ticket_id: '1' }])
+})
+
+test('with stacking on, a ticket with two unfinished blockers is held', async () => {
+  // given
+  // ... tickets 1 and 3 pr_open, and ticket 2 blocked by both
+  const db = await freshDb()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, pr_url) values ('1', 'one', 'pr_open', 'https://git/pr/1'), ('3', 'three', 'pr_open', 'https://git/pr/3')`)
+
+  // when
+  // ... sync runs at stack depth 2
+  await sync(run, db, dependent([1, 3]), 2)
+
+  // then
+  // ... ticket 2 is not in the table
+  assert.deepEqual(await sql(run, db, `select ticket_id from tickets order by rowid`), [{ ticket_id: '1' }, { ticket_id: '3' }])
+})
+
+test('with stacking on, a ticket is held when its stack would pass the stack depth', async () => {
+  // given
+  // ... ticket 1 pr_open stacked on ticket 0, also pr_open, and ticket 2 blocked by ticket 1, at stack depth 2
+  const db = await freshDb()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, pr_url, stacked_on) values ('0', 'zero', 'pr_open', 'https://git/pr/0', null), ('1', 'one', 'pr_open', 'https://git/pr/1', '0')`)
+
+  // when
+  // ... sync runs
+  await sync(run, db, dependent([1]), 2)
+
+  // then
+  // ... ticket 2 is not in the table
+  assert.deepEqual(await sql(run, db, `select ticket_id from tickets order by rowid`), [{ ticket_id: '0' }, { ticket_id: '1' }])
+})
+
+test('with stacking on, a ticket is held when another is already stacked on its blocker', async () => {
+  // given
+  // ... ticket 1 pr_open with ticket 3 already stacked on it, and ticket 2 blocked by ticket 1
+  const db = await freshDb()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, pr_url, stacked_on) values ('1', 'one', 'pr_open', 'https://git/pr/1', null), ('3', 'three', 'in_progress', null, '1')`)
+
+  // when
+  // ... sync runs at stack depth 3
+  await sync(run, db, dependent([1]), 3)
+
+  // then
+  // ... ticket 2 is not in the table
+  assert.deepEqual(await sql(run, db, `select ticket_id from tickets order by rowid`), [{ ticket_id: '1' }, { ticket_id: '3' }])
+})
+
+test('a ticket done in the tracker frees the tickets stacked on it', async () => {
+  // given
+  // ... ticket 1 pr_open with ticket 2 stacked on it, and the tracker now has ticket 1 done
+  const db = await freshDb()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, stacked_on) values ('1', 'one', 'pr_open', null), ('2', 'two', 'in_progress', '1')`)
+
+  // when
+  // ... sync runs
+  await sync(run, db, tracker([], [{ id: 1 }], []))
+
+  // then
+  // ... ticket 1 is done and ticket 2 is stacked on nothing
+  assert.deepEqual(await sql(run, db, `select ticket_id, status, stacked_on from tickets order by rowid`), [
+    { ticket_id: '1', status: 'done', stacked_on: null },
+    { ticket_id: '2', status: 'in_progress', stacked_on: null },
+  ])
+})

@@ -28,7 +28,10 @@ while a command still runs is read as the end of your work.
    force-push and never open a new PR.
 6. Rewrite the PR's title and description with the `pipeline:writing-pull-requests` skill so they describe the
    branch as it now stands: load it and follow it. Run its `check` on the body and on the title without the
-   `Draft: ` prefix, and do not update the PR until `check` passes. Then update the PR with the new body and the
+   `Draft: ` prefix, and do not update the PR until `check` passes. The diff the skill reads is against the PR's
+   own base branch, which for a PR stacked on another PR is that PR's branch, not the default branch (on GitHub:
+   `gh pr view <pr url> --json baseRefName`): `git fetch origin <baseRefName>`, then read `git diff origin/<baseRefName>...HEAD` and pass
+   `--base origin/<baseRefName>` to its `probe`. Then update the PR with the new body and the
    new title, keeping the `Draft: ` prefix in front (on GitHub:
    `gh pr edit <pr url> --title "Draft: <title>" --body-file <file>`). In the skill's facts file, set `ticket` to
    the ticket's id and `ticket_url` to its URL. When the tracker has no ticket URLs, leave `ticket_url` out: the

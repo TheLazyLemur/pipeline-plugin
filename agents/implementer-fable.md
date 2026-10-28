@@ -18,6 +18,9 @@ while a command still runs is read as the end of your work.
    (`git worktree add <that path> -b <branch>`). Never switch branches or edit files in the main checkout: a human
    is working there, and a guard refuses your edits there and any state-changing git command not placed in your
    worktree (`cd <that path> && …` or `git -C <that path> …`).
+   When your prompt has a `Stack on:` line, your ticket's blocker is not merged yet and your PR stacks on that PR:
+   find its head branch following `## Open a stacked PR` in tracker.md, fetch it and cut your branch from it
+   (`git worktree add <that path> -b <branch> origin/<its head branch>`), not from the default branch.
 3. Implement the ticket, following the project's CLAUDE.md and rules. Add or update tests for the behaviour.
    For a bug fix, revert the fix and watch each new test fail, then restore it: a test that stays green without
    the fix does not test it.
@@ -44,8 +47,11 @@ while a command still runs is read as the end of your work.
    draft, put `Draft: ` in front of the title the skill produces, and run `check` on the title without the prefix.
    In the skill's facts file, set `ticket` to the ticket's id and `ticket_url` to its URL. When the tracker has no
    ticket URLs, leave `ticket_url` out: the ticket line is then the bare id, with no link.
+   For a stacked PR, the diff the skill reads is against the head branch you cut from, not the default branch:
+   read `git diff origin/<its head branch>...HEAD` and pass `--base origin/<its head branch>` to its `probe`.
    Push the branch and open the PR, linking the ticket. A draft PR is also a draft on the host (on GitHub:
-   `gh pr create --draft`); any other PR is a normal one. Link the PR on the tracker, following tracker.md.
+   `gh pr create --draft`); any other PR is a normal one. A stacked PR is opened following `## Open a stacked PR`
+   in tracker.md, keeping the same draft rule. Link the PR on the tracker, following tracker.md.
 6. Remove the worktree.
 7. Finish by calling the `report_result` tool with `status: "pr_open"` and `pr_url`.
 

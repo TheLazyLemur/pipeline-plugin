@@ -33,6 +33,8 @@ export type Ticket = {
   learned: 0 | 1
   /** The status the loop last sent a notification for, or passed over without one. */
   notified_status: Status | null
+  /** The ticket whose unmerged PR this one's PR is stacked on; cleared once that ticket is done. */
+  stacked_on: string | null
 }
 
 export const DB = '.claude/pipeline/pipeline.db'
@@ -56,7 +58,8 @@ export const SCHEMA = `create table if not exists tickets (
   reason text,
   pr_url text,
   learned integer not null default 0 check (learned in (0, 1)),
-  notified_status text
+  notified_status text,
+  stacked_on text
 );
 create table if not exists turns (
   ticket_id text not null,
@@ -121,6 +124,7 @@ const ADDED: Record<string, string> = {
   owner_seen: 'text',
   restarts: 'integer not null default 0 check (restarts in (0, 1))',
   notified_status: 'text',
+  stacked_on: 'text',
 }
 
 /** What an added column starts as on the rows already there, when not its default: no notification for the state they hold. */
