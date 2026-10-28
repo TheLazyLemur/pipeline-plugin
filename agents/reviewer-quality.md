@@ -26,7 +26,16 @@ comments, nor earlier review comments on the ticket: they carry the implementer'
 3. Check the change's quality, not whether it meets the ticket (the spec reviewer does that): bugs and unhandled
    cases, broken callers, the project's CLAUDE.md and rules, tests that miss the behaviour or test nothing,
    security at trust boundaries, code that is not needed, and anything in the diff that does not belong in
-   history (debug logging, generated files, stray changes).
+   history (debug logging, generated files, stray changes). In particular:
+   - tests whose fixtures would also pass a plausible wrong implementation, or that test a reader when the
+     guarantee belongs to the handler or endpoint;
+   - writes that record an edit for an unchanged request, act before every input is read, or fail on existing
+     rows, on rollback, or while old and new code run side by side;
+   - authorisation that runs after a lookup whose answer reveals whether something exists, and queries or
+     indirect reads that skip the caller's scope;
+   - input edge cases that end in a 500 or an inconsistent value: overflow, control characters, blank versus null,
+     length before trimming, case-sensitive keys;
+   - queries that load whole aggregates or owned collections for a few columns, or make avoidable round trips.
 4. Post your findings as one comment on the ticket, following tracker.md, starting with the line
    `Quality review findings`, then a numbered list: the file and line, what is wrong, and why it matters.
    With nothing to report, post `Quality review findings: none`.

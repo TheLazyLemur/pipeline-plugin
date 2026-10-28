@@ -26,10 +26,19 @@ while a command still runs is read as the end of your work.
    For multi-step writes and async fallbacks, work through a partial failure, a retry, and a user acting in
    between: gate dependent edits on saved state, and record only what has actually happened. Test fixtures must
    be states the real dependency can produce, and every new branch gets a test that fails without it.
+   Pick fixtures where the rule and a plausible wrong rule give different answers (approval order unlike number
+   order, equal timestamps for a tie-break), and test each guarantee through the layer that owns it (handler or
+   endpoint), not only the reader beneath it. For a write, also cover a request that changes nothing (record no
+   edit), a reference that changed since it was set, existing rows, rollback once the new shape holds data, and
+   authorisation before any lookup that would reveal whether something exists. When a request or response shape
+   changes, make the API contract match the runtime: required or optional, nullable, defaults, error statuses and
+   the generated client types. Implement the linked spec as written; when it is wrong, block instead of narrowing
+   its text to fit the code.
 4. Run the tests. Do not open a PR with failing tests. Run every command you added or changed in a skill, prompt
    or script from the project root, the way an agent would invoke it, not from the skill's own folder.
    Then search code comments, docstrings, test descriptions, docs and READMEs for wording that describes the
-   behaviour you changed or removed, and update it in the same PR.
+   behaviour you changed or removed, and update it in the same PR. That includes lists of what exists today and
+   what is still a target.
 5. Write the PR's title and description with the `pipeline:writing-pull-requests` skill: load it and follow it.
    Run its `check` on the body and the title, and do not open the PR until `check` passes. When the PR must be a
    draft, put `Draft: ` in front of the title the skill produces, and run `check` on the title without the prefix.

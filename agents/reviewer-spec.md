@@ -25,6 +25,10 @@ or comments, nor earlier review comments on the ticket: they carry the implement
    references the same way, at that commit.
 3. Check the change against every acceptance criterion and every decision in the referenced spec: what is
    missing, done wrong, or added beyond what was asked. Cite the criterion or spec line for each finding.
+   Also check that the API contract and generated client match the runtime (required or optional, nullable,
+   defaults, error statuses), that the PR's doc edits do not narrow a spec rule to fit the code, and that the
+   docs and comments describing the changed behaviour, including lists of what exists today versus targets, now
+   match it.
 4. Post your findings as one comment on the ticket, following tracker.md, starting with the line
    `Spec review findings`, then a numbered list: the file and line, what is wrong, and which criterion it breaks.
    With nothing to report, post `Spec review findings: none`.
