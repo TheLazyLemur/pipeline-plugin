@@ -29,13 +29,16 @@ built-in `/loop`. It is a small mod (`hooks/register.ts`) that runs in the backg
 
 One pass of the loop (`src/loop.ts`), in order:
 1. Done: each `pr_open` ticket whose PR has merged is marked done in the tracker and in the table, so sync
-   releases its dependents in the same pass.
-2. Sync: pull new and changed tickets into SQLite (`src/sync.ts`, TypeScript).
-   A tracker command that fails or times out in step 1 or 2 is logged as "tracker unreachable: <reason>" and the
+   releases its dependents in the same pass. One whose PR was closed without merging goes to needs_human, and so
+   does every ticket stacked on it.
+2. Restack (only with `Stack depth:` above 1): each `pr_open` ticket stacked on another has its PR brought up to
+   date with the PR under it, bottom of the stack first; a failure sends it to needs_human with the error.
+3. Sync: pull new and changed tickets into SQLite (`src/sync.ts`, TypeScript).
+   A tracker command that fails or times out in steps 1 to 3 is logged as "tracker unreachable: <reason>" and the
    pass goes on with the tickets already in the table.
-3. Triage every ticket with status new, with the ticket body (`src/triage.ts`). A ticket whose triage fails stays
+4. Triage every ticket with status new, with the ticket body (`src/triage.ts`). A ticket whose triage fails stays
    new and is retried next pass.
-4. Stages: only the session that claimed an `in_progress` ticket (its `owner`) moves it on, since
+5. Stages: only the session that claimed an `in_progress` ticket (its `owner`) moves it on, since
    `$.agent.list()` sees that session's agents alone. An owned ticket with no live agent of its own moves on. At
    stage `review` the reviewers are done, so it goes to `verify` and the verifier is spawned. At `verify` or `fix`
    its agent is gone without a result: the first time (`restarts` 0) the pass sets `restarts` to 1 and spawns that
@@ -43,11 +46,12 @@ One pass of the loop (`src/loop.ts`), in order:
    needs_human. At `implement` it goes to needs_human straight away: the implementer may have pushed a branch or
    opened a PR. Another session's ticket is left alone while
    its owner has been seen in the last 15 minutes, and goes to needs_human once it has not.
-5. Spawn: if no ticket is in_progress (at any stage, in any session), claim the oldest ready one and spawn its
-   implementer at stage `implement`, telling it whether to open the PR as a draft. The claim is one guarded
+6. Spawn: if no ticket is in_progress (at any stage, in any session), claim the oldest ready one and spawn its
+   implementer at stage `implement`, telling it whether to open the PR as a draft and, for a stacked ticket, the
+   PR to stack on (`Stack on: <pr_url>`). The claim is one guarded
    update that sets the owner; a pass whose claim gets no row back (another pass won it) spawns nothing. If the
    spawn is denied, the ticket goes back to ready and the loop retries next pass.
-6. Notify: each ticket that entered `needs_human` (with its question), `pr_open` (its PR is ready for review) or
+7. Notify: each ticket that entered `needs_human` (with its question), `pr_open` (its PR is ready for review) or
    `done` (its PR merged) since it was last notified gets one ntfy notification (`src/notify.ts`), whichever code
    moved it. Its `notified_status` records the status sent; a ticket that leaves those statuses has it reset at the
    start of the next pass, so returning to one notifies again. The topic URL is read each pass from
@@ -55,7 +59,7 @@ One pass of the loop (`src/loop.ts`), in order:
    nothing old. The post is `curl` with a 5 second limit, a `Title`, `Tags` and `Click` (the ticket's URL for
    needs_human, the PR's otherwise) header and the ticket title plus the question or PR URL as body. A failed post
    logs "<ticket> notification failed: <reason>", leaves the marker and is retried next pass.
-7. Never wait on a human. Anything that needs one is set to needs_human with the question, and the loop
+8. Never wait on a human. Anything that needs one is set to needs_human with the question, and the loop
    moves on.
 
 ### The tracker.md command contract
@@ -69,8 +73,13 @@ non-zero, times out or prints another shape, ends the done and sync steps of tha
 | `## List the tickets waiting to be worked` | JSON array of `{id, title, url, body}`; `body` is the description plus acceptance criteria; epics are filtered by the command |
 | `## List the tickets that are done` | JSON array of `{id}` |
 | `## List the blockers` | JSON array of `{id, blocked_by, blocker_done}`, one row per link from a waiting ticket; `[]` when the tracker has no links |
-| `## Check whether a PR is merged` | `{"merged": true}` or `{"merged": false}`; gets the PR URL as `$1` |
+| `## Check whether a PR is merged` | `{"merged": true}`, `{"merged": false}` (open) or `{"merged": false, "closed": true}` (closed without merging); gets the PR URL as `$1` |
 | `## Mark a ticket done` | nothing; gets the tracker ticket id as `$1`, must succeed when it is already done |
+| `## Bring a stacked PR up to date` | only with `Stack depth:` above 1; nothing; gets the PR URL as `$1`, brings its branch up to date with its base on the host without touching a local checkout, exits 0 when already up to date and non-zero on a conflict or any failure |
+
+With `Stack depth:` above 1, tracker.md also needs `## Open a stacked PR`: instructions the implementer follows (how
+to find a PR's head branch and open a PR stacked on a given PR), not run by the mod. Without either section the done
+and sync steps fail with "run /tracker-setup". Design: `docs/specs/stacked-prs.md`.
 
 `$1` is passed as an argument (`sh -c '<command>' sh <value>`), never spliced into the command text.
 The agents and skills also follow the rest of tracker.md (read a ticket, move a status, add a comment, link a PR,
@@ -80,6 +89,12 @@ the status mapping). Design: `docs/specs/dependency-flow.md`.
 A waiting ticket with a blocker that is not done is held: sync does not insert it, and removes it while it is
 `new` or `ready`. A held ticket has no row and no status. It enters the table once its blockers are done.
 `/pipeline-status` lists held tickets live from the blockers command.
+
+With routing.md's `Stack depth:` above 1, a waiting ticket whose only unfinished blocker B is `pr_open` with a
+`pr_url` is released with `stacked_on = B`, provided B's stack (B, the ticket B is stacked on, and so on down to a
+done or unstacked one) plus this ticket holds at most `Stack depth` PRs, and no other unfinished ticket is stacked
+on B. Otherwise it is held as above. `stacked_on` is recomputed each pass while the row is `new` or `ready`, and
+kept once work starts. When a ticket becomes done, every ticket stacked on it has `stacked_on` cleared.
 
 ### Two plugins
 A plugin's hooks never run for agents that the same plugin spawned from its own code, and every pipeline agent is
@@ -189,8 +204,9 @@ notice of those agents, which would start a turn on the main thread; you still s
 
 ### Needing you
 A ticket goes to needs_human when triage finds it not ready (missing acceptance criteria, open questions),
-the implementer is blocked or ends without a result, an agent is hard-stopped at its limit, or its implementer
-disappears. The question is stored on
+the implementer is blocked or ends without a result, an agent is hard-stopped at its limit, its implementer
+disappears, its PR was closed without merging (or the PR it is stacked on was), or its stacked PR could not be
+brought up to date. The question is stored on
 the ticket. `/pipeline-status` in your session lists them; your answer is saved as a comment on the tracker
 ticket and it goes back to new or ready.
 
@@ -199,7 +215,8 @@ ticket and it goes back to new or ready.
 ### `/tracker-setup` (skill)
 A conversation between the user and Claude. Claude finds what is available for this project's tracker
 (an MCP server, `gh`, a Jira API key, anything else), reads the board's statuses, and writes
-`.claude/pipeline/tracker.md`: the five commands above, plus how to read one ticket, move a status, add a
+`.claude/pipeline/tracker.md`: the five commands above, the two stacked PR sections when the user wants stacking
+(and `Stack depth:` in routing.md), plus how to read one ticket, move a status, add a
 comment and link a PR, and the status mapping. It then copies the defaults for `readiness.md`, `rubric.md` and
 `routing.md` from `skills/tracker-setup/defaults/` into `.claude/pipeline/` when absent. No adapter code. A new
 tracker means running this skill again. A tracker reachable only through an MCP server, with no CLI or HTTP API,
@@ -207,7 +224,7 @@ cannot be synced, because the mod runs the commands itself.
 Credentials stay in env vars or the tool's own login, never in the file.
 
 ### `/pipeline-status` (skill)
-Shows counts by status, tickets in progress with their stage and open PRs, what each ticket cost (tokens and
+Shows counts by status, tickets in progress with their stage and open PRs with what each is stacked on, what each ticket cost (tokens and
 minutes, in total and per role with its model), held tickets and what holds each (a dependency cycle
 shows as tickets holding each other), then walks you through the needs_human questions and saves each answer.
 
@@ -232,6 +249,7 @@ Holds pipeline status. The tracker owns the ticket itself; SQLite holds our fiel
 | pr_url | |
 | learned | whether /learn has processed the PR |
 | notified_status | the status the loop last sent a notification for; set to `status` on existing rows when the column is added, so nothing is sent for them |
+| stacked_on | the ticket whose unmerged PR this ticket's PR is stacked on; null when not stacked, cleared when that ticket is done |
 
 A `turn.complete` hook in `pipeline-agents` adds one row to the `turns` table per finished turn of a pipeline
 agent, or of an agent one spawned (an Agent call, a fork, found up `parentId`), which counts against that pipeline
@@ -256,12 +274,14 @@ title, URL and body. Writes status, difficulty, confidence, model and reason.
 A short table: difficulty to model. Example: 1-2 sonnet, 3-4 opus, 5 fable. Security-critical goes to fable.
 Applied by Haiku at triage, not by a parser, and only to sonnet, opus or fable, the models with an implementer.
 Its `Review threshold: <n>` line is read by the mod: the difficulty at and above which a ticket gets agent review.
-Its `Agent token limit: <n>` and `Agent time limit: <minutes>` lines are the agent limits.
+Its `Agent token limit: <n>` and `Agent time limit: <minutes>` lines are the agent limits. Its `Stack depth: <n>`
+line (1, no stacking, when missing) is the most unmerged PRs a stack may hold, counting its bottom one.
 
 ### Implementers (`agents/implementer-sonnet.md`, `-opus.md`, `-fable.md`)
 Spawned by the loop for the routed model. Each reads the ticket, works in its own worktree, implements it, runs the
 tests, opens its own PR and links it on the tracker using tracker.md. It finishes by calling `report_result`, described above. Its prompt says whether to open the PR as a draft on the host with the `Draft: `
-title prefix.
+title prefix. A `Stack on: <pr_url>` line means the PR stacks on that PR: the implementer finds its head branch and
+opens the PR following tracker.md's `## Open a stacked PR`, branches from that head, and diffs against it.
 
 ### Review agents (`agents/reviewer-spec.md`, `reviewer-quality.md`, `verifier.md`, `fixer.md`)
 One file per role; the model is passed at spawn. Described above under agent review.
