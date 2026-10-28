@@ -24,7 +24,7 @@ python3 <skill dir>/scripts/pr.py check body.md --template <name> --title "<titl
 git diff "$(git merge-base HEAD origin/main)"..HEAD
 ```
 
-Use the actual default branch if it is not `main`. You cannot deduce applicability from the ticket title, only from the diff.
+Use the actual default branch if it is not `main`. For a PR stacked on another PR, diff against the branch it is stacked on instead, and pass that ref to `probe` as `--base`. You cannot deduce applicability from the ticket title, only from the diff.
 
 ## 2. Pick one template
 

@@ -9,8 +9,9 @@ The database is `.claude/pipeline/pipeline.db`, table `tickets`, read and writte
 
 1. Show the counts by status:
    `sqlite3 -box .claude/pipeline/pipeline.db "select status, count(*) as n from tickets group by status"`
-2. Show what is in progress, with its stage (implement, review, verify or fix), and the open PRs:
-   `select ticket_id, title, model, case status when 'in_progress' then 'in_progress (' || coalesce(stage, 'implement') || ')' else status end as status, pr_url from tickets where status in ('in_progress', 'pr_open')`
+2. Show what is in progress, with its stage (implement, review, verify or fix), and the open PRs, with the ticket
+   each one's PR is stacked on, if any:
+   `select ticket_id, title, model, case status when 'in_progress' then 'in_progress (' || coalesce(stage, 'implement') || ')' else status end as status, pr_url, stacked_on from tickets where status in ('in_progress', 'pr_open')`
 3. Show what each ticket cost, recorded from its agents' turns: per ticket, the total tokens (input, output, cache
    read and cache write) and minutes, then the breakdown per role with the model it ran on. Say "nothing recorded"
    when both are empty.
@@ -19,7 +20,9 @@ The database is `.claude/pipeline/pipeline.db`, table `tickets`, read and writte
 4. List the held tickets: waiting in the tracker but kept out of the table by a blocker not yet done. Run the
    `## List the blockers` and `## List the tickets waiting to be worked` commands from
    `.claude/pipeline/tracker.md` live, from the project root. For each waiting ticket with rows whose
-   `blocker_done` is false, show its id and title and the ids holding it. Point out tickets that hold each other
+   `blocker_done` is false, show its id and title and the ids holding it, leaving out a ticket whose row in
+   `tickets` has `stacked_on` set to its one unfinished blocker: that one was released on a stacked PR (routing.md's
+   `Stack depth:` above 1). Point out tickets that hold each other
    (a cycle). The user releases a cycle, or a ticket held by a blocker that will never merge, by unlinking or
    closing tickets in the tracker. Say "none held" when there are none.
 5. List the tickets that need the user, with their question and the triage reason:

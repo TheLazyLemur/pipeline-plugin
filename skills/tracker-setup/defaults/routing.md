@@ -25,3 +25,9 @@ it, and its wall time in minutes. At 80% of either it is told to wrap up; at the
 
 Agent token limit: 500000
 Agent time limit: 120
+
+## Stacked PRs
+
+Above 1, a blocked ticket may start on a PR stacked on its blocker's open PR, up to this many unmerged PRs per stack; needs tracker.md's stacked PR sections (/tracker-setup).
+
+Stack depth: 1
