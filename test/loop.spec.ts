@@ -810,24 +810,26 @@ test('a stacked PR that cannot be brought up to date sends its ticket to needs_h
 
 test('a PR closed without merging sends its ticket, and every ticket stacked on it, to needs_human', async () => {
   // given
-  // ... at stack depth 2, ticket 1's PR closed without merging, ticket 2 in progress stacked on it, and ticket 3 pr_open on its own
+  // ... at stack depth 3, ticket 1's PR closed without merging, ticket 2 in progress stacked on it, ticket 4 pr_open stacked on 2, and ticket 3 pr_open on its own
   const { run, db, root } = await freshProject()
-  stackDepth(root, 2)
-  await sqliteTracker(run, root, `insert into tickets values (1, 'in_review'), (2, 'in_progress'), (3, 'in_review');`, [])
+  stackDepth(root, 3)
+  await sqliteTracker(run, root, `insert into tickets values (1, 'in_review'), (2, 'in_progress'), (3, 'in_review'), (4, 'in_review');`, [])
   writeFileSync(join(root, 'closed.txt'), 'https://git/pr/1\n')
   await sql(run, db, `insert into tickets (ticket_id, title, status, pr_url, stacked_on, owner, restarts) values
-    ('1', 'one', 'pr_open', 'https://git/pr/1', null, null, 0), ('2', 'two', 'in_progress', null, '1', 's1', 1), ('3', 'three', 'pr_open', 'https://git/pr/3', null, null, 0)`)
+    ('1', 'one', 'pr_open', 'https://git/pr/1', null, null, 0), ('2', 'two', 'in_progress', null, '1', 's1', 1), ('3', 'three', 'pr_open', 'https://git/pr/3', null, null, 0),
+    ('4', 'four', 'pr_open', 'https://git/pr/4', '2', null, 0)`)
 
   // when
   // ... a pass runs with ticket 2's implementer live
   const log = await pass(deps(run, [live('pipeline 2')]).d)
 
   // then
-  // ... tickets 1 and 2 wait on a human, ticket 2's question names the closed PR, and ticket 3 is untouched
+  // ... tickets 1, 2 and 4 wait on a human, 2's and 4's questions name the closed PR, and ticket 3 is untouched
   const rows = await sql(run, db, `select ticket_id, status, restarts, question from tickets order by ticket_id`)
-  assert.deepEqual(rows.map(r => [r.ticket_id, r.status, r.restarts]), [['1', 'needs_human', 0], ['2', 'needs_human', 0], ['3', 'pr_open', 0]])
+  assert.deepEqual(rows.map(r => [r.ticket_id, r.status, r.restarts]), [['1', 'needs_human', 0], ['2', 'needs_human', 0], ['3', 'pr_open', 0], ['4', 'needs_human', 0]])
   assert.match(String(rows[0]?.question), /closed without merging/)
   assert.match(String(rows[1]?.question), /https:\/\/git\/pr\/1/)
+  assert.match(String(rows[3]?.question), /https:\/\/git\/pr\/1/)
   assert.match(log.join('\n'), /1 needs you: its PR was closed without merging/)
 })
 

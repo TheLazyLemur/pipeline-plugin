@@ -74,7 +74,12 @@ export const closeMerged = async (run: Run, db: string, tracker: string): Promis
     await sql(run, db, `update tickets set status = 'needs_human', question = ${lit(question)} where ticket_id = ${lit(ticket)} and status = 'pr_open'`)
     log.push(`${ticket} needs you: its PR was closed without merging`)
     const stacked = `This ticket is stacked on ${ticket}, whose PR ${t.pr_url} was closed without merging. Unlink it from ${ticket} in the tracker or close it; if it has a PR, retarget or close that, then set the ticket pr_open or send it back to new.`
-    const moved = await sql(run, db, `update tickets set status = 'needs_human', restarts = 0, question = ${lit(stacked)} where stacked_on = ${lit(ticket)} and status not in ('done', 'needs_human') returning ticket_id`)
+    const moved = await sql(
+      run,
+      db,
+      `with recursive above(ticket_id) as (select ticket_id from tickets where stacked_on = ${lit(ticket)} union select t.ticket_id from tickets t join above a on t.stacked_on = a.ticket_id)
+       update tickets set status = 'needs_human', restarts = 0, question = ${lit(stacked)} where ticket_id in (select ticket_id from above) and status not in ('done', 'needs_human') returning ticket_id`,
+    )
     for (const r of moved) log.push(`${r.ticket_id} needs you: the PR it is stacked on was closed without merging`)
   }
   return { done, log }
