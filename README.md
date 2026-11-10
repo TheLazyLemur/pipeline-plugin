@@ -76,7 +76,7 @@ flowchart TD
     impl -. blocked .-> nh
     fixer -. blocked .-> nh
     nh --> you[You answer in /pipeline:pipeline-status]
-    you -- "back to new or ready" --> triage
+    you -- "back to new or ready, answer kept for triage" --> triage
     nh & open --> notify([End of pass: ntfy for each ticket newly needs_human, pr_open or done])
 ```
 

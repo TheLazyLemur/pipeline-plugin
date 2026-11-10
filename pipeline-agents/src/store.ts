@@ -25,6 +25,8 @@ export type Ticket = {
   /** 1 once the loop restarted this ticket's vanished verifier or fixer; a second vanishing goes to needs_human. Back to 0 when the ticket leaves in_progress. */
   restarts: 0 | 1
   question: string | null
+  /** Each question the user answered in /pipeline-status with its answer (`Q: …\nA: …`), blank-line separated, oldest first; never reset, so triage sees every round. */
+  answers: string | null
   difficulty: number | null
   confidence: number | null
   model: string | null
@@ -52,6 +54,7 @@ export const SCHEMA = `create table if not exists tickets (
   owner_seen text,
   restarts integer not null default 0 check (restarts in (0, 1)),
   question text,
+  answers text,
   difficulty integer check (difficulty between 1 and 5),
   confidence real check (confidence between 0 and 1),
   model text check (model in ('haiku', 'sonnet', 'opus', 'fable')),
@@ -125,6 +128,7 @@ const ADDED: Record<string, string> = {
   restarts: 'integer not null default 0 check (restarts in (0, 1))',
   notified_status: 'text',
   stacked_on: 'text',
+  answers: 'text',
 }
 
 /** What an added column starts as on the rows already there, when not its default: no notification for the state they hold. */

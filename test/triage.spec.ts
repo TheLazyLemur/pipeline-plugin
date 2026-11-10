@@ -10,7 +10,7 @@ import { freshDb, run } from './helpers.ts'
 
 const guides = { readiness: 'Has acceptance criteria.', rubric: '1 trivial .. 5 hard.', routing: '1-2 sonnet' }
 const haiku = (text: string) => async () => ({ isAnswered: true, text }) as ModelCompleteResult
-const ticket = { ticket_id: 'T-1', title: 'Add login', url: null, body: null }
+const ticket = { ticket_id: 'T-1', title: 'Add login', url: null, body: null, answers: null }
 
 test('a ready ticket gets its scores, its routed model and status ready', async () => {
   // given

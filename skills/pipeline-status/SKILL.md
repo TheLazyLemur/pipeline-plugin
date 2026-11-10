@@ -31,6 +31,8 @@ The database is `.claude/pipeline/pipeline.db`, table `tickets`, read and writte
    - Save it to the ticket on the tracker as a comment, following `.claude/pipeline/tracker.md`, so the
      implementer reads it.
    - Send the ticket back: to `ready` if it already has a model and the answer only fills the gap (a confirmation
-     that a ticket triage was unsure of is ready counts), else to `new` so it is triaged again. Clear the question:
-     `update tickets set status = '<ready|new>', question = null where ticket_id = '<id>'`
+     that a ticket triage was unsure of is ready counts), else to `new` so it is triaged again. In the same
+     statement, append the question and the answer to `answers`, which triage reads (it never sees tracker
+     comments), and clear the question:
+     `update tickets set status = '<ready|new>', question = null, answers = coalesce(answers || char(10) || char(10), '') || 'Q: ' || coalesce(question, '') || char(10) || 'A: <answer>' where ticket_id = '<id>'`
      Double any `'` inside a value.
