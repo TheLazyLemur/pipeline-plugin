@@ -47,8 +47,11 @@ One pass of the loop (`src/loop.ts`), in order:
    opened a PR. Another session's ticket is left alone while
    its owner has been seen in the last 15 minutes, and goes to needs_human once it has not.
 6. Spawn: if no ticket is in_progress (at any stage, in any session), claim the oldest ready one and spawn its
-   implementer at stage `implement`, telling it whether to open the PR as a draft and, for a stacked ticket, the
-   PR to stack on (`Stack on: <pr_url>`). The claim is one guarded
+   implementer at stage `implement`, telling it whether to open the PR as a draft and what to cut its branch from:
+   for a stacked ticket the PR to stack on (`Stack on: <pr_url>`), for any other ticket origin's default branch
+   (`Branch from: origin/<default>`), read from `refs/remotes/origin/HEAD` before the claim, never the main
+   checkout's HEAD, which may be behind the remote. With `origin/HEAD` unset the ticket is not claimed and the pass
+   logs "run git remote set-head origin --auto". The claim is one guarded
    update that sets the owner; a pass whose claim gets no row back (another pass won it) spawns nothing. If the
    spawn is denied, the ticket goes back to ready and the loop retries next pass.
 7. Notify: each ticket that entered `needs_human` (with its question), `pr_open` (its PR is ready for review) or
@@ -287,7 +290,8 @@ triage judged ready goes to you to confirm; a malformed value fails triage of ev
 ### Implementers (`agents/implementer-sonnet.md`, `-opus.md`, `-fable.md`)
 Spawned by the loop for the routed model. Each reads the ticket, works in its own worktree, implements it, runs the
 tests, opens its own PR and links it on the tracker using tracker.md. It finishes by calling `report_result`, described above. Its prompt says whether to open the PR as a draft on the host with the `Draft: `
-title prefix. A `Stack on: <pr_url>` line means the PR stacks on that PR: the implementer finds its head branch and
+title prefix. A `Branch from: origin/<default>` line names the ref it fetches and cuts its branch from. A
+`Stack on: <pr_url>` line, in its place, means the PR stacks on that PR: the implementer finds its head branch and
 opens the PR following tracker.md's `## Open a stacked PR`, branches from that head, and diffs against it.
 
 ### Review agents (`agents/reviewer-spec.md`, `reviewer-quality.md`, `verifier.md`, `fixer.md`)

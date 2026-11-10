@@ -67,3 +67,10 @@ Things SPEC.md does not settle. Everything else the build decided is described i
     with the closed-PR one. An up-to-date command that times out (`$.process.run` rejects) is logged as "tracker
     unreachable" like any tracker command, not sent to needs_human: a timeout is more likely the host than a
     conflict.
+17. **Decided: an implementer cuts its branch from `origin/<default>`, which the loop reads from `origin/HEAD`** and
+    states on a `Branch from:` line. A branch cut from the main checkout's HEAD started wherever the user's local
+    `main` was: unpulled after a merge, it gave a PR that conflicted with main. The loop reads the ref locally
+    (`git symbolic-ref`) rather than asking the remote (`git ls-remote --symref`), so it needs no network, and
+    when the ref is unset it logs the fix and leaves the ticket ready rather than running
+    `git remote set-head origin --auto` itself, so it changes no ref of the user's. A remote whose default
+    branch was renamed after the clone leaves `origin/HEAD` stale until that command is run.
