@@ -36,8 +36,8 @@ One pass of the loop (`src/loop.ts`), in order:
 3. Sync: pull new and changed tickets into SQLite (`src/sync.ts`, TypeScript).
    A tracker command that fails or times out in steps 1 to 3 is logged as "tracker unreachable: <reason>" and the
    pass goes on with the tickets already in the table.
-4. Triage every ticket with status new, with the ticket body (`src/triage.ts`). A ticket whose triage fails stays
-   new and is retried next pass.
+4. Triage every ticket with status new, with the ticket body and the user's answers so far (`src/triage.ts`). A
+   ticket whose triage fails stays new and is retried next pass.
 5. Stages: only the session that claimed an `in_progress` ticket (its `owner`) moves it on, since
    `$.agent.list()` sees that session's agents alone. An owned ticket with no live agent of its own moves on. At
    stage `review` the reviewers are done, so it goes to `verify` and the verifier is spawned. At `verify` or `fix`
@@ -208,7 +208,8 @@ ready but with confidence below routing.md's threshold, the implementer is block
 agent is hard-stopped at its limit, its implementer disappears, its PR was closed without merging (or the PR it is
 stacked on was), or its stacked PR could not be brought up to date. The question is stored on
 the ticket. `/pipeline-status` in your session lists them; your answer is saved as a comment on the tracker
-ticket and it goes back to new or ready.
+ticket, for the implementer, and appended with its question to the ticket's `answers`, for triage, and the ticket
+goes back to new or ready.
 
 ## Pieces
 
@@ -242,6 +243,7 @@ Holds pipeline status. The tracker owns the ticket itself; SQLite holds our fiel
 | owner_seen | when the owner's pass last ran (SQLite `datetime('now')`) |
 | restarts | 1 once the pass restarted the ticket's vanished verifier or fixer; back to 0 when the ticket leaves in_progress |
 | question | what it needs from you, when needs_human |
+| answers | each question you answered in `/pipeline-status` with your answer, oldest first, never cleared; triage reads them with the body |
 | difficulty | 1-5 |
 | confidence | 0-1 |
 | model | haiku, sonnet, opus or fable |

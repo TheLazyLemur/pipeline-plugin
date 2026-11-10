@@ -36,9 +36,9 @@ test('a status outside the six is refused', async () => {
   await assert.rejects(write, /CHECK constraint failed/)
 })
 
-test('a database made before the body column gains it, keeping its rows', async () => {
+test('a database made before the body and answers columns gains them, keeping its rows', async () => {
   // given
-  // ... a tickets table without body, holding a ticket
+  // ... a tickets table without body or answers, holding a ticket
   const db = join(mkdtempSync(join(tmpdir(), 'pipeline-')), 'pipeline.db')
   await sql(run, db, `create table tickets (ticket_id text primary key, title text not null, status text not null default 'new'); insert into tickets (ticket_id, title) values ('T-1', 'one')`)
 
@@ -48,9 +48,9 @@ test('a database made before the body column gains it, keeping its rows', async 
   await migrate(run, db)
 
   // then
-  // ... the ticket is kept and body can be written
-  await sql(run, db, `update tickets set body = 'desc' where ticket_id = 'T-1'`)
-  assert.deepEqual(await sql(run, db, `select ticket_id, title, body from tickets`), [{ ticket_id: 'T-1', title: 'one', body: 'desc' }])
+  // ... the ticket is kept and body and answers can be written
+  await sql(run, db, `update tickets set body = 'desc', answers = 'Q: x A: y' where ticket_id = 'T-1'`)
+  assert.deepEqual(await sql(run, db, `select ticket_id, title, body, answers from tickets`), [{ ticket_id: 'T-1', title: 'one', body: 'desc', answers: 'Q: x A: y' }])
 })
 
 test('a database holding an older usage view gets the current one', async () => {

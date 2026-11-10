@@ -58,15 +58,15 @@ export const parseVerdict = (text: string): Verdict => {
 }
 
 /**
- * Triages one ticket with Haiku and writes the verdict, unless the ticket left `new` meanwhile. A ready verdict below
- * routing.md's confidence threshold goes to a human to confirm instead.
+ * Triages one ticket with Haiku, from its body and the user's answers so far, and writes the verdict, unless the
+ * ticket left `new` meanwhile. A ready verdict below routing.md's confidence threshold goes to a human to confirm instead.
  */
-export const triage = async (run: Run, complete: Complete, db: string, guides: Guides, t: Pick<Ticket, 'ticket_id' | 'title' | 'url' | 'body'>) => {
+export const triage = async (run: Run, complete: Complete, db: string, guides: Guides, t: Pick<Ticket, 'ticket_id' | 'title' | 'url' | 'body' | 'answers'>) => {
   const min = confidenceThreshold(guides.routing)
   const r = await complete({
     model: 'haiku',
     system: system(guides),
-    prompt: `Ticket ${t.ticket_id}: ${t.title}\n${t.url ?? ''}\n\n${t.body ?? '(no description)'}`,
+    prompt: `Ticket ${t.ticket_id}: ${t.title}\n${t.url ?? ''}\n\n${t.body ?? '(no description)'}${t.answers === null ? '' : `\n\nThe user's answers to earlier questions on this ticket:\n${t.answers}`}`,
     effort: 'low',
     timeoutMs: 60_000,
   })

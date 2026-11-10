@@ -114,7 +114,7 @@ const work = async (d: Deps, { tracker, readiness, rubric, routing }: Record<'tr
   for (const id of done) log.push(...(await removeWorktrees(d, id)))
 
   // 4. triage; a failed ticket stays new and is retried next pass
-  const fresh = (await sql(d.run, DB, `select ticket_id, title, url, body from tickets where status = 'new' order by rowid`)) as Ticket[]
+  const fresh = (await sql(d.run, DB, `select ticket_id, title, url, body, answers from tickets where status = 'new' order by rowid`)) as Ticket[]
   for (const t of fresh) {
     try {
       const v = await triage(d.run, d.complete, DB, { readiness, rubric, routing }, t)

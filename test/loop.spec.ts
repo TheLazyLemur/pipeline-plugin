@@ -249,6 +249,35 @@ test('new tickets are triaged in the pass', async () => {
   assert.match(prompts.join(), /the body/)
 })
 
+test('a ticket answered and sent back to new is triaged with every answer given so far', async () => {
+  // given
+  // ... a ticket answered in /pipeline-status twice, once per question triage asked, and sent back to new
+  const { run, db } = await freshProject()
+  const answer = (a: string) => `update tickets set status = 'new', question = null,
+    answers = coalesce(answers || char(10) || char(10), '') || 'Q: ' || coalesce(question, '') || char(10) || 'A: ' || ${lit(a)} where ticket_id = 'T-1'`
+  await sql(run, db, `insert into tickets (ticket_id, title, status, question) values ('T-1', 'one', 'needs_human', 'Which colour?')`)
+  await sql(run, db, answer('Blue'))
+  await sql(run, db, `update tickets set status = 'needs_human', question = 'Which shade?'`)
+  await sql(run, db, answer('Navy'))
+  const { d } = deps(run, [])
+  const prompts: string[] = []
+  const complete = d.complete
+  d.complete = r => {
+    assert(typeof r.prompt === 'string')
+    prompts.push(r.prompt)
+    return complete(r)
+  }
+
+  // when
+  // ... a pass runs
+  await pass(d)
+
+  // then
+  // ... Haiku is shown both questions with their answers, in the order given
+  assert.equal(prompts.length, 1)
+  assert.match(prompts.join(), /Q: Which colour\?\nA: Blue\n\nQ: Which shade\?\nA: Navy/)
+})
+
 test('nothing is spawned while an implementer is running', async () => {
   // given
   // ... one ticket in progress with its implementer live, and one ready
