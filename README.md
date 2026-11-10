@@ -24,6 +24,10 @@ them`.
 The plugin needs `python3` on the `PATH`: the implementer and fixer write every PR with the
 `pipeline:writing-pull-requests` skill, and its `scripts/pr.py` runs under `python3`. Notifications need `curl`.
 
+Implementers fetch and cut their branch from origin's default branch, never from your checkout's HEAD, so a local
+`main` you have not pulled does not matter. The loop reads that branch from `origin/HEAD`, which `git clone` sets; in
+a repository that was not cloned, run `git remote set-head origin --auto` once, or no implementer starts.
+
 Then, in your project:
 
 | command | what it does |

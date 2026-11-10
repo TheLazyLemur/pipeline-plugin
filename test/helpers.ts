@@ -38,6 +38,8 @@ export const freshProject = async () => {
   const empty = [WAITING, DONE, BLOCKERS, MARK_DONE].map(h => `## ${h}\n\`\`\`sh\ntrue\n\`\`\`\n`).join('')
   writeFileSync(join(root, '.claude/pipeline/tracker.md'), `# tracker\n${empty}## ${MERGED}\n\`\`\`sh\necho '{"merged": false}'\n\`\`\`\n`)
   const inRoot: Run = (argv, init) => run(argv, { cwd: root, ...init })
+  // a clone, which knows origin's default branch
+  for (const argv of [['git', 'init', '-q'], ['git', 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main']]) assert.equal((await inRoot(argv)).exitCode, 0, argv.join(' '))
   await sql(inRoot, DB, SCHEMA)
   return { run: inRoot, db: DB, root }
 }

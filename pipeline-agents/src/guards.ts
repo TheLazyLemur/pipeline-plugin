@@ -88,7 +88,7 @@ const target = (input: Record<string, unknown>) => {
   return typeof p === 'string' ? p : ''
 }
 
-const how = (worktree: string) => `Work in your worktree, ${worktree} (git worktree add ${worktree} …), and target it in git commands with cd ${worktree} && … or git -C ${worktree} ….`
+const how = (worktree: string) => `Work in your worktree, ${worktree} (git fetch origin, then git worktree add ${worktree} … origin/<branch>), and target it in git commands with cd ${worktree} && … or git -C ${worktree} ….`
 
 /**
  * The refusal for a pipeline agent's edit inside the main checkout at `root`, or its state-changing git command

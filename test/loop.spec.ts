@@ -225,6 +225,42 @@ test('the next ready ticket is handed to the implementer for its model', async (
   ])
 })
 
+test("the implementer is told to branch from origin's default branch, not the main checkout's HEAD", async () => {
+  // given
+  // ... a ready ticket, and a clone whose origin's default branch is trunk while the checkout is on another branch
+  const { run, db } = await freshProject()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, model, difficulty) values ('T-1', 'one', 'ready', 'sonnet', 1)`)
+  assert.equal((await run(['git', 'symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/trunk'])).exitCode, 0)
+  const { d, spawned } = deps(run, [])
+
+  // when
+  // ... a pass runs
+  await pass(d)
+
+  // then
+  // ... its prompt names origin's default branch to cut from
+  assert.match(spawned[0]?.prompt ?? '', /^Branch from: origin\/trunk$/m)
+})
+
+test("with origin's default branch unknown, the next ready ticket is not claimed and the pass says how to set it", async () => {
+  // given
+  // ... a ready ticket, and a repository with no origin/HEAD
+  const { run, db } = await freshProject()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, model, difficulty) values ('T-1', 'one', 'ready', 'sonnet', 1)`)
+  assert.equal((await run(['git', 'symbolic-ref', '--delete', 'refs/remotes/origin/HEAD'])).exitCode, 0)
+  const { d, spawned } = deps(run, [])
+
+  // when
+  // ... a pass runs
+  const log = await pass(d)
+
+  // then
+  // ... nothing is spawned, the ticket stays ready and unowned, and the log names the fix
+  assert.deepEqual(spawned, [])
+  assert.deepEqual(await sql(run, db, `select status, owner from tickets`), [{ status: 'ready', owner: null }])
+  assert.match(log.join('\n'), /implementer for T-1 not started: origin's default branch is unknown .*; run git remote set-head origin --auto/)
+})
+
 test('new tickets are triaged in the pass', async () => {
   // given
   // ... a new ticket and an implementer already running
@@ -766,13 +802,14 @@ test('with stacking on, a ticket whose only blocker has its PR open is pulled in
   await pass(d)
 
   // then
-  // ... ticket 2 is stacked on ticket 1 and handed to its implementer with the PR to stack on
+  // ... ticket 2 is stacked on ticket 1 and handed to its implementer with the PR to stack on instead of a branch to cut from
   assert.deepEqual(await sql(run, db, `select ticket_id, status, stacked_on from tickets order by rowid`), [
     { ticket_id: '1', status: 'pr_open', stacked_on: null },
     { ticket_id: '2', status: 'in_progress', stacked_on: '1' },
   ])
   assert.deepEqual(spawned.map(s => s.description), ['pipeline 2'])
   assert.match(spawned[0]?.prompt ?? '', /^Stack on: https:\/\/git\/pr\/1$/m)
+  assert.doesNotMatch(spawned[0]?.prompt ?? '', /^Branch from:/m)
 })
 
 for (const missing of [STACK, RESTACK]) {

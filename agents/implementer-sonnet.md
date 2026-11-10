@@ -14,13 +14,15 @@ Run every command in the foreground, never in the background, and wait for it to
 while a command still runs is read as the end of your work.
 
 1. Read the ticket in full from the tracker, following tracker.md, and move it to in progress there.
-2. Work in a fresh git worktree on a new branch at exactly the path on the `Worktree:` line of your prompt
-   (`git worktree add <that path> -b <branch>`). Never switch branches or edit files in the main checkout: a human
-   is working there, and a guard refuses your edits there and any state-changing git command not placed in your
-   worktree (`cd <that path> && …` or `git -C <that path> …`).
-   When your prompt has a `Stack on:` line, your ticket's blocker is not merged yet and your PR stacks on that PR:
-   find its head branch following `## Open a stacked PR` in tracker.md, fetch it and cut your branch from it
-   (`git worktree add <that path> -b <branch> origin/<its head branch>`), not from the default branch.
+2. Work in a fresh git worktree on a new branch at exactly the path on the `Worktree:` line of your prompt, cut
+   from the ref on the `Branch from:` line after a fetch (`git fetch origin`, then
+   `git worktree add <that path> -b <branch> <that ref>`). Never cut it from the main checkout's HEAD, which may be
+   behind the remote. Never switch branches or edit files in the main checkout: a human is working there, and a
+   guard refuses your edits there and any state-changing git command not placed in your worktree
+   (`cd <that path> && …` or `git -C <that path> …`).
+   When your prompt has a `Stack on:` line instead, your ticket's blocker is not merged yet and your PR stacks on
+   that PR: find its head branch following `## Open a stacked PR` in tracker.md, fetch it and cut your branch from
+   it (`git worktree add <that path> -b <branch> origin/<its head branch>`), not from the default branch.
 3. Implement the ticket, following the project's CLAUDE.md and rules. Add or update tests for the behaviour.
    For a bug fix, revert the fix and watch each new test fail, then restore it: a test that stays green without
    the fix does not test it.

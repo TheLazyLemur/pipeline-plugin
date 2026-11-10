@@ -176,6 +176,14 @@ const work = async (d: Deps, { tracker, readiness, rubric, routing }: Record<'tr
   if (!MODELS.includes(next.model as (typeof MODELS)[number])) throw new Error(`${next.ticket_id} is ready with no routed model: ${next.model}`)
   if (next.difficulty === null) throw new Error(`${next.ticket_id} is ready with no difficulty`)
   const draft = next.difficulty >= reviewFrom(routing)
+  // a stacked ticket cuts its branch from its blocker's; any other from origin's default branch, never from the main
+  // checkout's HEAD, which may be behind it. Read before the claim, so a failure leaves the ticket ready.
+  const head = next.stack_on === null ? await d.run(['git', 'symbolic-ref', '--short', 'refs/remotes/origin/HEAD']) : null
+  if (head !== null && head.exitCode !== 0) {
+    log.push(`implementer for ${next.ticket_id} not started: origin's default branch is unknown (${head.stderr.trim()}); run git remote set-head origin --auto`)
+    return log
+  }
+  const from = head === null ? `Stack on: ${next.stack_on}` : `Branch from: ${head.stdout.trim()}`
   // the claim: one statement, so of passes racing (in this session or another) only one gets the row back, and only
   // while nothing is in_progress
   const claimed = await sql(
@@ -188,7 +196,7 @@ const work = async (d: Deps, { tracker, readiness, rubric, routing }: Record<'tr
   const s = await d.spawn({
     description: `${TAG} ${next.ticket_id}`,
     subagentType: `${d.plugin}:implementer-${next.model}`,
-    prompt: `Ticket ${next.ticket_id}: ${next.title}\n${next.url ?? ''}\n${worktreeLine(d, next.ticket_id, 'implementer')}\n${next.stack_on === null ? '' : `Stack on: ${next.stack_on}\n`}\n${
+    prompt: `Ticket ${next.ticket_id}: ${next.title}\n${next.url ?? ''}\n${worktreeLine(d, next.ticket_id, 'implementer')}\n${from}\n\n${
       draft ? 'Open the PR as a draft on the host, with the title prefix "Draft: ": agents review it before the user does.' : 'Open the PR without a "Draft: " title prefix.'
     }`,
   })
