@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { test } from 'node:test'
 import type { ModelCompleteRequest, ModelCompleteResult } from 'claude-code'
 import { sql } from '../pipeline-agents/src/store.ts'
-import { reviewFrom } from '../pipeline-agents/src/routing.ts'
+import { confidenceThreshold, reviewFrom } from '../pipeline-agents/src/routing.ts'
 import { triage } from '../src/triage.ts'
 import { freshDb, run } from './helpers.ts'
 
@@ -44,6 +44,58 @@ test('a ticket that is not ready goes to needs_human with the question', async (
   // then
   // ... it waits on a human with the question stored
   assert.deepEqual(await sql(run, db, `select status, question from tickets`), [{ status: 'needs_human', question: 'Which providers?' }])
+})
+
+test('a ready ticket triage is unsure of goes to needs_human, asking you to confirm it', async () => {
+  // given
+  // ... a new ticket Haiku judges ready at a confidence below the default threshold of 0.7
+  const db = await freshDb()
+  await sql(run, db, `insert into tickets (ticket_id, title) values ('T-1', 'Add login')`)
+  const complete = haiku('{"ready": true, "question": null, "difficulty": 2, "confidence": 0.6, "model": "sonnet", "reason": "Criteria are thin."}')
+
+  // when
+  // ... it is triaged
+  await triage(run, complete, db, guides, ticket)
+
+  // then
+  // ... it waits on a human, keeping its routed model, with a question giving the confidence and the reason
+  assert.deepEqual(await sql(run, db, `select status, question, model from tickets`), [{
+    status: 'needs_human',
+    question: 'Triage judged this ready but was unsure (confidence 0.6, below 0.7). Its reason: "Criteria are thin." Confirm it is ready, or say what is missing.',
+    model: 'sonnet',
+  }])
+})
+
+test('a ready ticket at exactly the confidence threshold is ready', async () => {
+  // given
+  // ... a new ticket Haiku judges ready at a confidence of 0.7
+  const db = await freshDb()
+  await sql(run, db, `insert into tickets (ticket_id, title) values ('T-1', 'Add login')`)
+  const complete = haiku('{"ready": true, "question": null, "difficulty": 2, "confidence": 0.7, "model": "sonnet", "reason": "clear"}')
+
+  // when
+  // ... it is triaged
+  await triage(run, complete, db, guides, ticket)
+
+  // then
+  // ... it is ready
+  assert.deepEqual(await sql(run, db, `select status, question from tickets`), [{ status: 'ready', question: null }])
+})
+
+test('the confidence threshold set in routing.md is the one triage holds a ready ticket to', async () => {
+  // given
+  // ... a routing.md raising the threshold to 0.9 and a new ticket Haiku judges ready at 0.8
+  const db = await freshDb()
+  await sql(run, db, `insert into tickets (ticket_id, title) values ('T-1', 'Add login')`)
+  const complete = haiku('{"ready": true, "question": null, "difficulty": 2, "confidence": 0.8, "model": "sonnet", "reason": "clear"}')
+
+  // when
+  // ... it is triaged
+  await triage(run, complete, db, { ...guides, routing: '1-2 sonnet\nConfidence threshold: 0.9\n' }, ticket)
+
+  // then
+  // ... it waits on a human
+  assert.deepEqual(await sql(run, db, `select status from tickets`), [{ status: 'needs_human' }])
 })
 
 test('a reply that is not a verdict leaves the ticket new and throws', async () => {
@@ -99,4 +151,22 @@ test('the review threshold is read from routing.md, 3 when the line is missing, 
   // ... the defaults and the raised value come back, and the typo is named
   assert.deepEqual(read, [3, 6, 3])
   assert.throws(bad, /must be a whole number from 1, not "three"/)
+})
+
+test('the confidence threshold is read from routing.md, 0.7 when the line is missing, and a bad one fails', () => {
+  // given
+  // ... the default routing.md, one with the threshold lowered, one written before it existed, and two with typos
+  const routing = readFileSync(join(import.meta.dirname, '../skills/tracker-setup/defaults/routing.md'), 'utf8')
+
+  // when
+  // ... each is read
+  const read = [routing, routing.replace('Confidence threshold: 0.7', 'confidence threshold: 0.5'), '# Routing\n'].map(confidenceThreshold)
+  const percent = () => confidenceThreshold('Confidence threshold: 70')
+  const empty = () => confidenceThreshold('Confidence threshold:')
+
+  // then
+  // ... the defaults and the lowered value come back, and each typo is named
+  assert.deepEqual(read, [0.7, 0.5, 0.7])
+  assert.throws(percent, /must be a number from 0 to 1, not "70"/)
+  assert.throws(empty, /must be a number from 0 to 1, not ""/)
 })

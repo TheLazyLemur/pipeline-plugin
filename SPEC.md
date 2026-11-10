@@ -203,10 +203,10 @@ PR merges denied in settings if merging should stay with you. A `prompt.submit` 
 notice of those agents, which would start a turn on the main thread; you still see a one-line log per event.
 
 ### Needing you
-A ticket goes to needs_human when triage finds it not ready (missing acceptance criteria, open questions),
-the implementer is blocked or ends without a result, an agent is hard-stopped at its limit, its implementer
-disappears, its PR was closed without merging (or the PR it is stacked on was), or its stacked PR could not be
-brought up to date. The question is stored on
+A ticket goes to needs_human when triage finds it not ready (missing acceptance criteria, open questions) or
+ready but with confidence below routing.md's threshold, the implementer is blocked or ends without a result, an
+agent is hard-stopped at its limit, its implementer disappears, its PR was closed without merging (or the PR it is
+stacked on was), or its stacked PR could not be brought up to date. The question is stored on
 the ticket. `/pipeline-status` in your session lists them; your answer is saved as a comment on the tracker
 ticket and it goes back to new or ready.
 
@@ -268,14 +268,19 @@ Read and written with the `sqlite3` CLI.
 ### Triage (`src/triage.ts`, not a skill)
 For each new ticket, Haiku checks readiness against `.claude/pipeline/readiness.md`, scores difficulty against
 `.claude/pipeline/rubric.md` and picks the model from `.claude/pipeline/routing.md`, in one call, from the
-title, URL and body. Writes status, difficulty, confidence, model and reason.
+title, URL and body. Writes status, difficulty, confidence, model and reason. A ticket judged ready with confidence
+below routing.md's `Confidence threshold:` (0.7 itself passes) goes to needs_human instead, keeping its model, with a
+question that says triage was unsure, gives the confidence and the reason, and asks you to confirm it is ready or say
+what is missing.
 
 ### Routing (`.claude/pipeline/routing.md`)
 A short table: difficulty to model. Example: 1-2 sonnet, 3-4 opus, 5 fable. Security-critical goes to fable.
 Applied by Haiku at triage, not by a parser, and only to sonnet, opus or fable, the models with an implementer.
 Its `Review threshold: <n>` line is read by the mod: the difficulty at and above which a ticket gets agent review.
 Its `Agent token limit: <n>` and `Agent time limit: <minutes>` lines are the agent limits. Its `Stack depth: <n>`
-line (1, no stacking, when missing) is the most unmerged PRs a stack may hold, counting its bottom one.
+line (1, no stacking, when missing) is the most unmerged PRs a stack may hold, counting its bottom one. Its
+`Confidence threshold: <n>` line (0.7 when missing), a number from 0 to 1, is the confidence below which a ticket
+triage judged ready goes to you to confirm; a malformed value fails triage of every new ticket, which stays new.
 
 ### Implementers (`agents/implementer-sonnet.md`, `-opus.md`, `-fable.md`)
 Spawned by the loop for the routed model. Each reads the ticket, works in its own worktree, implements it, runs the

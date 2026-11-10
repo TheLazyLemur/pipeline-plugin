@@ -1,4 +1,5 @@
 import type { ModelCompleteRequest, ModelCompleteResult } from 'claude-code'
+import { confidenceThreshold } from '../pipeline-agents/src/routing.ts'
 import { type Run, type Ticket, lit, sql } from '../pipeline-agents/src/store.ts'
 
 /** The shape of `$.model.complete`. */
@@ -56,8 +57,12 @@ export const parseVerdict = (text: string): Verdict => {
   return { ...v, question: v.ready ? null : v.question }
 }
 
-/** Triages one ticket with Haiku and writes the verdict, unless the ticket left `new` meanwhile. */
+/**
+ * Triages one ticket with Haiku and writes the verdict, unless the ticket left `new` meanwhile. A ready verdict below
+ * routing.md's confidence threshold goes to a human to confirm instead.
+ */
 export const triage = async (run: Run, complete: Complete, db: string, guides: Guides, t: Pick<Ticket, 'ticket_id' | 'title' | 'url' | 'body'>) => {
+  const min = confidenceThreshold(guides.routing)
   const r = await complete({
     model: 'haiku',
     system: system(guides),
@@ -66,7 +71,10 @@ export const triage = async (run: Run, complete: Complete, db: string, guides: G
     timeoutMs: 60_000,
   })
   if (!r.isAnswered) throw new Error(`triage of ${t.ticket_id}: no answer (${r.reason})`)
-  const v = parseVerdict(r.text)
+  const said = parseVerdict(r.text)
+  const v: Verdict = said.ready && said.confidence < min
+    ? { ...said, ready: false, question: `Triage judged this ready but was unsure (confidence ${said.confidence}, below ${min}). Its reason: ${JSON.stringify(said.reason)} Confirm it is ready, or say what is missing.` }
+    : said
   await sql(run, db, `update tickets set
       status = ${lit(v.ready ? 'ready' : 'needs_human')}, question = ${lit(v.question)},
       difficulty = ${lit(v.difficulty)}, confidence = ${lit(v.confidence)}, model = ${lit(v.model)}, reason = ${lit(v.reason)}

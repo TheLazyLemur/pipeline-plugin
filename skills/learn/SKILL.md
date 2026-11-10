@@ -39,7 +39,8 @@ The database is `.claude/pipeline/pipeline.db`, table `tickets`, read and writte
    - the implementer prompt for that model (`agents/implementer-<model>.md` in the pipeline plugin), or the
      review agents' (`agents/reviewer-spec.md`, `reviewer-quality.md`, `verifier.md`, `fixer.md`) if agent review
      should have caught it,
-   - `.claude/pipeline/readiness.md` if the ticket should not have been ready,
+   - `.claude/pipeline/readiness.md` if the ticket should not have been ready (or routing.md's
+     `Confidence threshold` if triage was sure of it and wrong),
    - `.claude/pipeline/rubric.md` or `routing.md` if it went to the wrong model or skipped agent review
      (routing.md's `Review threshold`),
    - or a checklist the project keeps.
