@@ -80,6 +80,14 @@ non-zero, times out or prints another shape, ends the done and sync steps of tha
 | `## Mark a ticket done` | nothing; gets the tracker ticket id as `$1`, must succeed when it is already done |
 | `## Bring a stacked PR up to date` | only with `Stack depth:` above 1; nothing; gets the PR URL as `$1`, brings its branch up to date with its base on the host without touching a local checkout, exits 0 when already up to date and non-zero on a conflict or any failure |
 
+Two more are run by the CLI (`bin/pipeline.ts`), never by the mod, so a tracker.md without them still syncs and only
+the CLI fails, with "run /tracker-setup":
+
+| heading | contract |
+|---|---|
+| `## Create a ticket` | reads `{"title", "body"}` JSON on stdin, `body` markdown; creates the ticket in a waiting status, so the next sync pulls it in; prints `{"id", "url"}`, `id` a string that is one path segment, `url` null when there is none |
+| `## Link a blocker` | nothing; gets the ticket id as `$1` and its blocker's id as `$2`, records the link so the blockers command prints it, exits 0 on success |
+
 With `Stack depth:` above 1, tracker.md also needs `## Open a stacked PR`: instructions the implementer follows (how
 to find a PR's head branch and open a PR stacked on a given PR), not run by the mod. Without either section the done
 and sync steps fail with "run /tracker-setup". Design: `docs/specs/stacked-prs.md`.
@@ -219,13 +227,30 @@ goes back to new or ready.
 ### `/tracker-setup` (skill)
 A conversation between the user and Claude. Claude finds what is available for this project's tracker
 (an MCP server, `gh`, a Jira API key, anything else), reads the board's statuses, and writes
-`.claude/pipeline/tracker.md`: the five commands above, the two stacked PR sections when the user wants stacking
-(and `Stack depth:` in routing.md), plus how to read one ticket, move a status, add a
+`.claude/pipeline/tracker.md`: the five commands above, the CLI's create and link commands (checked by shape, never run, so
+nothing is posted to a shared board), the two stacked PR sections when the user wants stacking
+(and `Stack depth:` in routing.md), plus how to read one ticket (printed as markdown or plain text, never ADF), move a status, add a
 comment and link a PR, and the status mapping. It then copies the defaults for `readiness.md`, `rubric.md` and
 `routing.md` from `skills/tracker-setup/defaults/` into `.claude/pipeline/` when absent. No adapter code. A new
-tracker means running this skill again. A tracker reachable only through an MCP server, with no CLI or HTTP API,
+tracker means running this skill again; run again on a tracker.md that lacks sections, it adds only those. A tracker reachable only through an MCP server, with no CLI or HTTP API,
 cannot be synced, because the mod runs the commands itself.
 Credentials stay in env vars or the tool's own login, never in the file.
+
+### `bin/pipeline.ts` (CLI)
+Adds work without an agent or a session, for a UI or a script, run from the project root as
+`node <plugin>/bin/pipeline.ts <command>`. Output is one line of JSON or nothing; any failure exits 1 with one line on
+stderr naming what failed.
+- `tracker create`: `{"title", "body"}` on stdin, passed on as the stdin of `## Create a ticket`; prints its
+  `{"id", "url"}` once the id passes the same one-path-segment rule as the worktree guard (`isTicketId`).
+- `tracker link-blocker <id> <blocker>`: runs `## Link a blocker` with them as `$1` and `$2`, both checked
+  against that rule first.
+- `triage-preview`: `{"title", "body"}` on stdin; triages the draft as the loop would triage it as a ticket, with
+  triage's own system and ticket prompts (`system`, `ticketPrompt`), `parseVerdict`, and `decide`, the one function
+  that turns a verdict and routing.md's confidence threshold into ready or needs_human. With no session there is no
+  `$.model.complete`, so it runs `claude -p --model haiku --effort low --tools "" --no-session-persistence
+  --strict-mcp-config --safe-mode --setting-sources ""`, which keeps CLAUDE.md, settings, hooks, skills and plugins
+  out, with every inherited `CLAUDE*` variable unset but `CLAUDE_CONFIG_DIR` and `CLAUDE_CODE_OAUTH_TOKEN`, which
+  pick the login. Prints `{"status", "ready", "question", "difficulty", "confidence", "model", "reason"}`.
 
 ### `/pipeline-status` (skill)
 Shows counts by status, tickets in progress with their stage and open PRs with what each is stacked on, what each ticket cost (tokens and

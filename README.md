@@ -39,6 +39,23 @@ Then, in your project:
 Once `/pipeline:tracker-setup` has run, the loop starts with the session: the first pass runs 10 seconds after start,
 then one pass every 5 minutes. Pipeline state lives in `.claude/pipeline/pipeline.db`.
 
+### Add work without an agent
+
+`bin/pipeline.ts` adds tickets from outside a session, for a UI or a script. Run it from the project root with
+Node 25, which runs TypeScript directly:
+
+| command | stdin | prints |
+|---|---|---|
+| `node <plugin>/bin/pipeline.ts tracker create` | `{"title", "body"}`, body markdown | `{"id", "url"}`: the new ticket, created in a waiting status so the next sync pulls it in |
+| `node <plugin>/bin/pipeline.ts tracker link-blocker <id> <blocker>` | nothing | nothing; records that `<id>` is blocked by `<blocker>` |
+| `node <plugin>/bin/pipeline.ts triage-preview` | `{"title", "body"}` | `{"status": "ready" or "needs_human", "ready", "question", "difficulty", "confidence", "model", "reason"}` |
+
+`tracker create` and `tracker link-blocker` run tracker.md's `## Create a ticket` and `## Link a blocker`; a
+tracker.md written before them needs `/pipeline:tracker-setup` again, which adds only what is missing.
+`triage-preview` judges a draft with the same prompts, guides and confidence threshold as the loop's triage, through
+`claude -p` on Haiku with your CLAUDE.md, settings, hooks and plugins left out. Output is one line of JSON; any
+failure exits 1 with one line on stderr.
+
 To get a push notification through [ntfy](https://ntfy.sh) when a ticket needs you, its PR is ready for review, or
 its PR merged, put the topic URL in `.claude/pipeline/ntfy-url` (for example
 `https://ntfy.home.opsbox.co.za/agent-notifications`). Each pass reads it, so adding, changing or removing it needs no
