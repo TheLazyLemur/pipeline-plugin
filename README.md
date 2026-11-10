@@ -57,7 +57,9 @@ flowchart TD
     held -- no --> triage[Triage every new ticket with Haiku]
     triage --> verdict{Ready?}
     verdict -- no --> nh[needs_human: question stored on the ticket]
-    verdict -- yes --> ready[ready: difficulty scored, model routed]
+    verdict -- yes --> sure{"Confidence at or above routing.md's threshold, 0.7 by default?"}
+    sure -- "no: asks you to confirm" --> nh
+    sure -- yes --> ready[ready: difficulty scored, model routed]
     ready --> busy{A ticket already in_progress?}
     busy -- yes --> wait([Wait for the next pass])
     busy -- no --> impl[Spawn the routed implementer: sonnet, opus or fable]

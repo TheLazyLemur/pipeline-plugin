@@ -15,6 +15,20 @@ const whole = (routing: string, label: string, fallback: number): number => {
   return n
 }
 
+/** routing.md's `<label>: <n>` line as a number from 0 to 1; `fallback` when the line is missing, like `whole`. */
+const fraction = (routing: string, label: string, fallback: number): number => {
+  const line = routing.match(new RegExp(`^${label}:(.*)$`, 'im'))
+  if (line === null) return fallback
+  const raw = (line[1] ?? '').trim()
+  const n = Number(raw)
+  // Number('') is 0, so an empty value is refused by name
+  if (raw === '' || !(n >= 0 && n <= 1)) throw new Error(`routing.md "${label}:" must be a number from 0 to 1, not ${JSON.stringify(raw)}`)
+  return n
+}
+
+/** The confidence below which triage sends a ticket it judged ready to a human, from routing.md's `Confidence threshold: <n>` line. */
+export const confidenceThreshold = (routing: string): number => fraction(routing, 'Confidence threshold', 0.7)
+
 /** The difficulty at and above which a ticket is reviewed, from routing.md's `Review threshold: <n>` line. */
 export const reviewFrom = (routing: string): number => whole(routing, 'Review threshold', 3)
 

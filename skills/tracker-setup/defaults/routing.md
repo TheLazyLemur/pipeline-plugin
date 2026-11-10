@@ -10,6 +10,12 @@ Difficulty (from rubric.md) to the model that implements the ticket.
 
 Security-critical work (auth, payments, secrets, permissions, crypto) goes to fable whatever its difficulty.
 
+## Confidence
+
+A ticket triage judges ready with a confidence (0 to 1) below this comes to you to confirm before any agent starts it.
+
+Confidence threshold: 0.7
+
 ## Review
 
 Tickets at or above this difficulty open as a `Draft: ` PR and are reviewed by agents on opus before

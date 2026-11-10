@@ -30,7 +30,7 @@ The database is `.claude/pipeline/pipeline.db`, table `tickets`, read and writte
 6. Go through them one at a time, asking the user each question. The user may skip any. For each answer:
    - Save it to the ticket on the tracker as a comment, following `.claude/pipeline/tracker.md`, so the
      implementer reads it.
-   - Send the ticket back: to `ready` if it already has a model and the answer only fills the gap, else to `new`
-     so it is triaged again. Clear the question:
+   - Send the ticket back: to `ready` if it already has a model and the answer only fills the gap (a confirmation
+     that a ticket triage was unsure of is ready counts), else to `new` so it is triaged again. Clear the question:
      `update tickets set status = '<ready|new>', question = null where ticket_id = '<id>'`
      Double any `'` inside a value.
