@@ -1,3 +1,4 @@
+import { isTicketId } from '../pipeline-agents/src/guards.ts'
 import { type Run, lit, sql } from '../pipeline-agents/src/store.ts'
 
 /** The headings in tracker.md whose first fenced block is a shell command printing a JSON array. */
@@ -10,6 +11,9 @@ export const MARK_DONE = 'Mark a ticket done'
 /** With stacking on: instructions the agents follow, then a command taking a PR URL as `$1`. */
 export const STACK = 'Open a stacked PR'
 export const RESTACK = 'Bring a stacked PR up to date'
+/** The headings `bin/pipeline.ts` runs to add work, never the loop: create reads `{"title", "body"}` JSON on stdin; link takes a ticket id and its blocker's as `$1` and `$2`. */
+export const CREATE = 'Create a ticket'
+export const LINK_BLOCKER = 'Link a blocker'
 
 type Row = Record<string, unknown>
 
@@ -30,11 +34,31 @@ const list = async (run: Run, tracker: string, heading: string): Promise<Row[]> 
   return rows
 }
 
-/** Runs one tracker.md command with `value` as its `$1`, so the value is never read as shell text. */
-const call = async (run: Run, cmd: string, heading: string, value: string) => {
-  const r = await run(['sh', '-c', cmd, 'sh', value])
-  if (r.exitCode !== 0) throw new Error(`"${heading}" exited ${r.exitCode} for ${value}: ${r.stderr.trim()}`)
+/** Runs one tracker.md command with `values` as its `$1`, `$2`…, so no value is ever read as shell text. */
+const call = async (run: Run, cmd: string, heading: string, ...values: string[]) => {
+  const r = await run(['sh', '-c', cmd, 'sh', ...values])
+  if (r.exitCode !== 0) throw new Error(`"${heading}" exited ${r.exitCode} for ${values.join(' ')}: ${r.stderr.trim()}`)
   return r.stdout.trim()
+}
+
+/** Creates a ticket in the tracker's waiting status, passing `draft` as JSON on the command's stdin; resolves its id and url. */
+export const create = async (run: Run, tracker: string, draft: { title: string; body: string }): Promise<{ id: string; url: string | null }> => {
+  const r = await run(['sh', '-c', command(tracker, CREATE)], { stdin: JSON.stringify(draft) })
+  if (r.exitCode !== 0) throw new Error(`"${CREATE}" exited ${r.exitCode}: ${r.stderr.trim()}`)
+  let t: { id?: unknown; url?: unknown } | null = null
+  try {
+    t = JSON.parse(r.stdout)
+  } catch {}
+  if (typeof t?.id !== 'string' || !isTicketId(t.id) || (typeof t.url !== 'string' && t.url !== null)) {
+    throw new Error(`"${CREATE}" printed ${JSON.stringify(r.stdout.trim().slice(0, 200))}, not {"id": "<one path segment>", "url": "<url>"|null}`)
+  }
+  return { id: t.id, url: t.url }
+}
+
+/** Records in the tracker that `ticket` is blocked by `blocker`. */
+export const linkBlocker = async (run: Run, tracker: string, ticket: string, blocker: string) => {
+  for (const v of [ticket, blocker]) if (!isTicketId(v)) throw new Error(`${JSON.stringify(v)} is not a ticket id`)
+  await call(run, command(tracker, LINK_BLOCKER), LINK_BLOCKER, ticket, blocker)
 }
 
 /** Frees the tickets stacked on `ticket`, which is done: the host retargets their PRs, so each is an ordinary PR. */
