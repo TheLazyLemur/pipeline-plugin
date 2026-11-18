@@ -279,7 +279,7 @@ question that says triage was unsure, gives the confidence and the reason, and a
 what is missing.
 
 ### Routing (`.claude/pipeline/routing.md`)
-A short table: difficulty to model. Example: 1-2 sonnet, 3-4 opus, 5 fable. Security-critical goes to fable.
+A short table: difficulty to model. Example: 1-3 sonnet, 4 opus, 5 fable. Security-critical never goes below opus.
 Applied by Haiku at triage, not by a parser, and only to sonnet, opus or fable, the models with an implementer.
 Its `Review threshold: <n>` line is read by the mod: the difficulty at and above which a ticket gets agent review.
 Its `Agent token limit: <n>` and `Agent time limit: <minutes>` lines are the agent limits. Its `Stack depth: <n>`
