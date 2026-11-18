@@ -24,7 +24,8 @@ export type Verdict = {
   reason: string
 }
 
-const system = (g: Guides) => `You triage one ticket for an AI implementer that works without a human.
+/** Triage's system prompt, built from the project's guides. */
+export const system = (g: Guides) => `You triage one ticket for an AI implementer that works without a human.
 Judge readiness against the readiness guide, difficulty against the rubric, and pick the model from the routing table.
 
 <readiness>
@@ -57,24 +58,25 @@ export const parseVerdict = (text: string): Verdict => {
   return { ...v, question: v.ready ? null : v.question }
 }
 
+/** The ticket as triage shows it to Haiku: id, title, url, body and the user's answers so far. */
+export const ticketPrompt = (t: Pick<Ticket, 'ticket_id' | 'title' | 'url' | 'body' | 'answers'>) =>
+  `Ticket ${t.ticket_id}: ${t.title}\n${t.url ?? ''}\n\n${t.body ?? '(no description)'}${t.answers === null ? '' : `\n\nThe user's answers to earlier questions on this ticket:\n${t.answers}`}`
+
+/** The verdict the pipeline acts on: a ready one below `min`, routing.md's confidence threshold, goes to a human to confirm. */
+export const decide = (said: Verdict, min: number): Verdict =>
+  said.ready && said.confidence < min
+    ? { ...said, ready: false, question: `Triage judged this ready but was unsure (confidence ${said.confidence}, below ${min}). Its reason: ${JSON.stringify(said.reason)} Confirm it is ready, or say what is missing.` }
+    : said
+
 /**
  * Triages one ticket with Haiku, from its body and the user's answers so far, and writes the verdict, unless the
  * ticket left `new` meanwhile. A ready verdict below routing.md's confidence threshold goes to a human to confirm instead.
  */
 export const triage = async (run: Run, complete: Complete, db: string, guides: Guides, t: Pick<Ticket, 'ticket_id' | 'title' | 'url' | 'body' | 'answers'>) => {
   const min = confidenceThreshold(guides.routing)
-  const r = await complete({
-    model: 'haiku',
-    system: system(guides),
-    prompt: `Ticket ${t.ticket_id}: ${t.title}\n${t.url ?? ''}\n\n${t.body ?? '(no description)'}${t.answers === null ? '' : `\n\nThe user's answers to earlier questions on this ticket:\n${t.answers}`}`,
-    effort: 'low',
-    timeoutMs: 60_000,
-  })
+  const r = await complete({ model: 'haiku', system: system(guides), prompt: ticketPrompt(t), effort: 'low', timeoutMs: 60_000 })
   if (!r.isAnswered) throw new Error(`triage of ${t.ticket_id}: no answer (${r.reason})`)
-  const said = parseVerdict(r.text)
-  const v: Verdict = said.ready && said.confidence < min
-    ? { ...said, ready: false, question: `Triage judged this ready but was unsure (confidence ${said.confidence}, below ${min}). Its reason: ${JSON.stringify(said.reason)} Confirm it is ready, or say what is missing.` }
-    : said
+  const v = decide(parseVerdict(r.text), min)
   await sql(run, db, `update tickets set
       status = ${lit(v.ready ? 'ready' : 'needs_human')}, question = ${lit(v.question)},
       difficulty = ${lit(v.difficulty)}, confidence = ${lit(v.confidence)}, model = ${lit(v.model)}, reason = ${lit(v.reason)}
