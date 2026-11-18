@@ -2,6 +2,7 @@ import type { Register } from 'claude-code'
 import { LOOP_PLUGIN, TAG } from '../pipeline-agents/src/agents.ts'
 import { pass } from '../src/loop.ts'
 import { type Prompts, promptsChanged } from '../src/prompts.ts'
+import { trackerTool } from '../src/sync.ts'
 
 const FIRST_MS = 10_000
 // STALE in src/loop.ts is 3 of these intervals: change it with this.
@@ -35,6 +36,8 @@ export const register: Register = on => {
       if (isRunning) return
       isRunning = true
       try {
+        // looked up each pass: the project's mod loads, reloads and goes away while the session runs
+        const tracker = await trackerTool($.tool)
         const lines = await pass({
           run: (argv, init) => $.process.run(argv, { cwd: root, ...init }),
           complete: request => $.model.complete(request),
@@ -44,6 +47,7 @@ export const register: Register = on => {
           session,
           root,
           home,
+          tracker,
         })
         for (const line of lines) $.ui.log(line)
       } catch (err) {

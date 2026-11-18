@@ -3,25 +3,16 @@
  *   tracker create                      {"title", "body"} JSON on stdin; prints {"id", "url"}
  *   tracker link-blocker <id> <blocker> prints nothing
  *   triage-preview                      {"title", "body"} JSON on stdin; prints triage's verdict as the loop would act on it
+ * The two tracker commands run the project mod's `/pipeline-tracker` command in a headless `claude -p` (`tracker` below).
  * Any failure exits 1 with one line on stderr.
  */
-import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { confidenceThreshold } from '../pipeline-agents/src/routing.ts'
-import type { Run } from '../pipeline-agents/src/store.ts'
-import { create, linkBlocker } from '../src/sync.ts'
+import { type Tracker, create, linkBlocker } from '../src/sync.ts'
 import { decide, parseVerdict, system, ticketPrompt } from '../src/triage.ts'
 
 const USAGE = 'usage: pipeline.ts tracker create | tracker link-blocker <id> <blocker> | triage-preview'
-
-/** `$.process.run` over child_process, from the cwd, as the mod runs tracker.md from the project root. */
-const run: Run = async ([cmd, ...args], init) => {
-  assert(cmd, 'run needs a command')
-  const r = spawnSync(cmd, args, { input: init?.stdin ?? '', encoding: 'utf8', timeout: init?.timeoutMs ?? 60_000 })
-  // a spawn failure or timeout reads as a failed command, so the caller names the heading that failed
-  return { exitCode: r.error ? 1 : (r.status ?? 1), stdout: r.stdout ?? '', stderr: r.error?.message ?? r.stderr, isStdoutTruncated: false, isStderrTruncated: false }
-}
 
 const file = (name: string) => {
   try {
@@ -45,6 +36,21 @@ const draft = (): { title: string; body: string } => {
 const AUTH = ['CLAUDE_CONFIG_DIR', 'CLAUDE_CODE_OAUTH_TOKEN']
 const env = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith('CLAUDE') || AUTH.includes(k)))
 
+/** The project mod /tracker-setup writes, loaded by any session started in the project root. */
+const MOD = '.claude/skills/pipeline-tracker'
+
+/** One op of the project's tracker tool, outside a session: the mod's `/pipeline-tracker <op> <json args>` answers it with no model turn, printing the result as JSON and exiting 0, or the error and exiting 1. */
+const tracker: Tracker = async (op, args = {}) => {
+  if (!existsSync(MOD)) throw new Error(`no pipeline tracker mod here (${MOD}); run /tracker-setup`)
+  const r = spawnSync('claude', ['-p', '--no-session-persistence', `/pipeline-tracker ${op} ${JSON.stringify(args)}`], { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', env: env(), timeout: 120_000 })
+  if (r.error || r.status !== 0) throw new Error(`tracker ${op} failed (${r.error?.message ?? `exit ${r.status}`}): ${(r.stdout || r.stderr).trim()}`)
+  try {
+    return JSON.parse(r.stdout)
+  } catch {
+    throw new Error(`tracker ${op} printed ${JSON.stringify(r.stdout.trim().slice(0, 200))}, not JSON`)
+  }
+}
+
 /** Triages a draft as the loop would triage it as a ticket, with Haiku through `claude -p` since there is no session here. */
 const preview = (d: { title: string; body: string }) => {
   const guides = { readiness: file('readiness.md'), rubric: file('rubric.md'), routing: file('routing.md') }
@@ -59,8 +65,8 @@ const preview = (d: { title: string; body: string }) => {
 }
 
 const main = async ([a, b, ...rest]: string[]): Promise<unknown> => {
-  if (a === 'tracker' && b === 'create' && rest.length === 0) return create(run, file('tracker.md'), draft())
-  if (a === 'tracker' && b === 'link-blocker' && rest.length === 2) return linkBlocker(run, file('tracker.md'), rest[0] as string, rest[1] as string)
+  if (a === 'tracker' && b === 'create' && rest.length === 0) return create(tracker, draft())
+  if (a === 'tracker' && b === 'link-blocker' && rest.length === 2) return linkBlocker(tracker, rest[0] as string, rest[1] as string)
   if (a === 'triage-preview' && b === undefined) return preview(draft())
   throw new Error(USAGE)
 }

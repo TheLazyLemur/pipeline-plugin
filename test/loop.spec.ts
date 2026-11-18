@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -9,8 +9,7 @@ import type { AgentInfo, AgentSpawnArgs, AgentSpawnResult, ModelCompleteResult }
 import { type Deps, pass } from '../src/loop.ts'
 import { onReport } from '../pipeline-agents/src/result.ts'
 import { type Run, lit, sql } from '../pipeline-agents/src/store.ts'
-import { BLOCKERS, DONE, MARK_DONE, MERGED, RESTACK, STACK, WAITING } from '../src/sync.ts'
-import { freshProject } from './helpers.ts'
+import { fakeTracker, freshProject } from './helpers.ts'
 
 const live = (description: string) => ({ description, status: 'running', spawnedBy: 'pipeline' }) as AgentInfo
 
@@ -29,36 +28,38 @@ const deps = (run: Run, agents: AgentInfo[], refuse = false, session = 's1', pat
     plugin: 'pipeline',
     session,
     ...paths,
+    tracker: memTracker({}).tracker,
   }
   return { d, spawned }
 }
 
-/** The commands of a SQLite tracker in the project root: `todo` tickets wait, `links` hold "blocked by", merged.txt and closed.txt list merged and closed PR URLs, restacked.txt records each PR brought up to date and conflicts.txt those that fail. */
-const COMMANDS: Record<string, string> = {
-  [WAITING]: `sqlite3 -json tracker.db "select id, 't' || id as title, null as url, null as body from tickets where status = 'todo'"`,
-  [DONE]: `sqlite3 -json tracker.db "select id from tickets where status = 'done'"`,
-  [BLOCKERS]: `sqlite3 -json tracker.db "select l.ticket_id as id, l.blocked_by, b.status = 'done' as blocker_done from links l join tickets b on b.id = l.blocked_by"`,
-  [MERGED]: `if grep -qxF -- "$1" merged.txt; then echo '{"merged": true}'; elif grep -qxF -- "$1" closed.txt 2>/dev/null; then echo '{"merged": false, "closed": true}'; else echo '{"merged": false}'; fi`,
-  [MARK_DONE]: `case "$1" in ''|*[!0-9]*) exit 2;; esac; sqlite3 tracker.db "update tickets set status = 'done' where id = $1"`,
-  [STACK]: `gh pr view "$1" --json headRefName`,
-  [RESTACK]: `printf '%s\\n' "$1" >> restacked.txt; if grep -qxF -- "$1" conflicts.txt 2>/dev/null; then echo 'merge conflict in a.ts' >&2; exit 1; fi`,
-}
-
-/** Points the project's tracker.md at a fresh SQLite tracker filled by `fill`, with `merged` as the merged PR URLs; `omit` leaves a section out. */
-const sqliteTracker = async (run: Run, root: string, fill: string, merged: string[], omit?: string, commands = COMMANDS) => {
-  await sql(run, 'tracker.db', `create table tickets (id integer primary key, status text not null);
-    create table links (ticket_id integer not null, blocked_by integer not null);
-    ${fill}`)
-  writeFileSync(join(root, 'merged.txt'), merged.map(url => `${url}\n`).join(''))
-  const sections = Object.entries(commands).filter(([h]) => h !== omit)
-  writeFileSync(join(root, '.claude/pipeline/tracker.md'), sections.map(([h, cmd]) => `## ${h}\n\`\`\`sh\n${cmd}\n\`\`\`\n`).join(''))
+/**
+ * A tracker in memory, answering as the project's tracker tool does: `status` holds each ticket's status (`todo` waits,
+ * `mark_done` sets `done`), `links` each [ticket, blocked by], `prs` each merged or closed PR URL (any other is open),
+ * and `conflicts` the PR URLs `pr_restack` fails on; `restacked` records each PR brought up to date.
+ */
+const memTracker = (status: Record<string, string>, links: [string, string][] = [], prs: Record<string, 'merged' | 'closed'> = {}, conflicts: string[] = []) => {
+  const restacked: unknown[] = []
+  const tracker = fakeTracker({
+    waiting: () => Object.keys(status).filter(id => status[id] === 'todo').map(id => ({ id, title: `t${id}`, url: null, body: null })),
+    done: () => Object.keys(status).filter(id => status[id] === 'done').map(id => ({ id })),
+    blockers: () => links.map(([id, by]) => ({ id, blocked_by: by, blocker_done: status[by] === 'done' })),
+    pr_merged: ({ url }) => (prs[String(url)] === 'merged' ? { merged: true } : prs[String(url)] === 'closed' ? { merged: false, closed: true } : { merged: false }),
+    mark_done: ({ id }) => {
+      status[String(id)] = 'done'
+      return 'ok'
+    },
+    pr_restack: ({ url }) => {
+      restacked.push(url)
+      if (conflicts.includes(String(url))) throw new Error('merge conflict in a.ts')
+      return 'ok'
+    },
+  })
+  return { tracker, status, restacked }
 }
 
 /** Sets routing.md's stack depth. */
 const stackDepth = (root: string, n: number) => writeFileSync(join(root, '.claude/pipeline/routing.md'), `# routing\nStack depth: ${n}\n`)
-
-/** Each line of the project's `name`, or none when it was never written. */
-const lines = (root: string, name: string) => (existsSync(join(root, name)) ? readFileSync(join(root, name), 'utf8').split('\n').filter(l => l !== '') : [])
 
 type Sent = { path: string | undefined; title: string | undefined; tags: string | undefined; click: string | undefined; body: string }
 
@@ -83,17 +84,17 @@ const ntfy = async (root: string) => {
 test('a merged PR marks its ticket done in the tracker and the table', async () => {
   // given
   // ... a ticket with its PR open and merged
-  const { run, db, root } = await freshProject()
-  await sqliteTracker(run, root, `insert into tickets values (1, 'in_review');`, ['https://git/pr/1'])
+  const { run, db } = await freshProject()
+  const t = memTracker({ 1: 'in_review' }, [], { 'https://git/pr/1': 'merged' })
   await sql(run, db, `insert into tickets (ticket_id, title, status, pr_url) values ('1', 'one', 'pr_open', 'https://git/pr/1')`)
 
   // when
   // ... a pass runs
-  const log = await pass(deps(run, []).d)
+  const log = await pass({ ...deps(run, []).d, tracker: t.tracker })
 
   // then
   // ... it is done in both, and the pass says so
-  assert.deepEqual(await sql(run, 'tracker.db', `select status from tickets`), [{ status: 'done' }])
+  assert.deepEqual(t.status, { 1: 'done' })
   assert.deepEqual(await sql(run, db, `select status from tickets`), [{ status: 'done' }])
   assert.match(log.join('\n'), /1 is done: its PR merged/)
 })
@@ -101,27 +102,27 @@ test('a merged PR marks its ticket done in the tracker and the table', async () 
 test('an unmerged PR leaves its ticket open in the tracker and the table', async () => {
   // given
   // ... a ticket with its PR open and not merged
-  const { run, db, root } = await freshProject()
-  await sqliteTracker(run, root, `insert into tickets values (1, 'in_review');`, [])
+  const { run, db } = await freshProject()
+  const t = memTracker({ 1: 'in_review' })
   await sql(run, db, `insert into tickets (ticket_id, title, status, pr_url) values ('1', 'one', 'pr_open', 'https://git/pr/1')`)
 
   // when
   // ... a pass runs
-  await pass(deps(run, []).d)
+  await pass({ ...deps(run, []).d, tracker: t.tracker })
 
   // then
   // ... it is still in review and pr_open
-  assert.deepEqual(await sql(run, 'tracker.db', `select status from tickets`), [{ status: 'in_review' }])
+  assert.deepEqual(t.status, { 1: 'in_review' })
   assert.deepEqual(await sql(run, db, `select status from tickets`), [{ status: 'pr_open' }])
 })
 
 test('a dependent of a ticket whose PR just merged is pulled in and started in the same pass', async () => {
   // given
   // ... ticket 2 waiting, blocked by ticket 1 whose PR has merged
-  const { run, db, root } = await freshProject()
-  await sqliteTracker(run, root, `insert into tickets values (1, 'in_review'), (2, 'todo'); insert into links values (2, 1);`, ['https://git/pr/1'])
+  const { run, db } = await freshProject()
   await sql(run, db, `insert into tickets (ticket_id, title, status, pr_url) values ('1', 'one', 'pr_open', 'https://git/pr/1')`)
   const { d, spawned } = deps(run, [])
+  d.tracker = memTracker({ 1: 'in_review', 2: 'todo' }, [['2', '1']], { 'https://git/pr/1': 'merged' }).tracker
 
   // when
   // ... a pass runs
@@ -136,71 +137,46 @@ test('a dependent of a ticket whose PR just merged is pulled in and started in t
   assert.deepEqual(spawned.map(s => s.description), ['pipeline 2'])
 })
 
-test('a PR URL reaches the merge check as literal text', async () => {
+test('without the tracker tool the pass says to run /tracker-setup, skips the tracker steps and still spawns the verifier', async () => {
   // given
-  // ... a merged PR whose URL holds quotes, a command separator and a command substitution
-  const url = `https://git/pr/1';touch hacked;'$(touch hacked)`
-  const { run, db, root } = await freshProject()
-  await sqliteTracker(run, root, `insert into tickets values (1, 'in_review');`, [url])
-  await sql(run, db, `insert into tickets (ticket_id, title, status, pr_url) values ('1', 'one', 'pr_open', ${lit(url)})`)
+  // ... no tracker tool, a ticket whose PR is open, and a ticket at stage verify whose verifier is still to be started
+  const { run, db } = await freshProject()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, pr_url) values ('1', 'one', 'pr_open', 'https://git/pr/1')`)
+  await sql(run, db, `insert into tickets (ticket_id, title, status, stage, started, model, difficulty, pr_url) values ('T-1', 'two', 'in_progress', 'verify', 0, 'sonnet', 3, 'https://git/pr/2')`)
+  const { d, spawned } = deps(run, [])
+  d.tracker = null
 
   // when
   // ... a pass runs
-  await pass(deps(run, []).d)
+  const log = await pass(d)
 
   // then
-  // ... the check matched the URL exactly, so the ticket is done, and nothing in it ran
-  assert.deepEqual(await sql(run, db, `select status from tickets`), [{ status: 'done' }])
-  assert.throws(() => readFileSync(join(root, 'hacked')), { code: 'ENOENT' })
+  // ... it logs the fix, leaves the open PR's ticket as it was, and still starts the verifier
+  assert.match(log.join('\n'), /^no pipeline tracker tool here; run \/tracker-setup$/m)
+  assert.deepEqual(await sql(run, db, `select status from tickets where ticket_id = '1'`), [{ status: 'pr_open' }])
+  assert.deepEqual(spawned.map(s => s.description), ['pipeline T-1 verifier'])
 })
 
-for (const missing of [MERGED, MARK_DONE]) {
-  test(`a tracker.md without "## ${missing}" is logged as the tracker unreachable`, async () => {
-    // given
-    // ... a tracker.md written before that section was required, and no PR open
-    const { run, root } = await freshProject()
-    await sqliteTracker(run, root, '', [], missing)
+test('a tracker op that fails is logged as the tracker unreachable and the stage step still spawns the verifier', async () => {
+  // given
+  // ... a ticket at stage verify whose verifier is still to be started, and a tracker whose every op fails, as the tool's deny or timeout does
+  const { run, db } = await freshProject()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, stage, started, model, difficulty, pr_url) values ('T-1', 'one', 'in_progress', 'verify', 0, 'sonnet', 3, 'https://git/pr/1')`)
+  const { d, spawned } = deps(run, [])
+  d.tracker = async () => {
+    throw new Error('timed out after 30 s')
+  }
 
-    // when
-    // ... a pass runs
-    const log = await pass(deps(run, []).d)
+  // when
+  // ... a pass runs
+  const log = await pass(d)
 
-    // then
-    // ... it logs the section and the fix
-    assert.match(log.join('\n'), new RegExp(`tracker unreachable: tracker.md has no command under "## ${missing}"; run /tracker-setup`))
-  })
-}
-
-/** A run whose tracker commands (run with sh) exit 1, as an unreachable tracker does. */
-const failing = (run: Run): Run => async (argv, init) => (argv[0] === 'sh' ? { exitCode: 1, stdout: '', stderr: 'connection refused', isStdoutTruncated: false, isStderrTruncated: false } : run(argv, init))
-/** A run whose tracker commands reject, as `$.process.run` does on its timeout. */
-const timingOut = (run: Run): Run => async (argv, init) => {
-  if (argv[0] === 'sh') throw new Error('$.process.run(sh) aborted: still running after 30000ms')
-  return run(argv, init)
-}
-
-for (const [how, broken, reason] of [
-  ['fails', failing, /tracker unreachable: "List the tickets waiting to be worked" exited 1: connection refused/],
-  ['times out', timingOut, /tracker unreachable: \$\.process\.run\(sh\) aborted: still running after 30000ms/],
-] as const) {
-  test(`a tracker command that ${how} is logged and the stage step still spawns the verifier`, async () => {
-    // given
-    // ... a ticket at stage verify whose verifier is still to be started, and a tracker that ${how}
-    const { run, db } = await freshProject()
-    await sql(run, db, `insert into tickets (ticket_id, title, status, stage, started, model, difficulty, pr_url) values ('T-1', 'one', 'in_progress', 'verify', 0, 'sonnet', 3, 'https://git/pr/1')`)
-    const { d, spawned } = deps(broken(run), [])
-
-    // when
-    // ... a pass runs
-    const log = await pass(d)
-
-    // then
-    // ... the pass logs the tracker unreachable and still starts the verifier
-    assert.match(log.join('\n'), reason)
-    assert.deepEqual(spawned.map(s => s.description), ['pipeline T-1 verifier'])
-    assert.deepEqual(await sql(run, db, `select stage, started from tickets`), [{ stage: 'verify', started: 1 }])
-  })
-}
+  // then
+  // ... the pass logs the tracker unreachable with the reason and still starts the verifier
+  assert.match(log.join('\n'), /tracker unreachable: timed out after 30 s/)
+  assert.deepEqual(spawned.map(s => s.description), ['pipeline T-1 verifier'])
+  assert.deepEqual(await sql(run, db, `select stage, started from tickets`), [{ stage: 'verify', started: 1 }])
+})
 
 test('the next ready ticket is handed to the implementer for its model', async () => {
   // given
@@ -217,7 +193,7 @@ test('the next ready ticket is handed to the implementer for its model', async (
   // then
   // ... the first ticket goes to the fable implementer, told to open a draft and where its worktree is, and is in progress at stage implement
   assert.deepEqual(spawned.map(s => [s.description, s.subagentType]), [['pipeline T-1', 'pipeline:implementer-fable']])
-  assert.match(spawned[0]?.prompt ?? '', /with the title prefix "Draft: "/)
+  assert.match(spawned[0]?.prompt ?? '', /`pr_create` with `draft: true`/)
   assert.match(spawned[0]?.prompt ?? '', /^Worktree: \/home\/u\/\.claude\/pipeline-worktrees\/project\/T-1-implementer$/m)
   assert.deepEqual(await sql(run, db, `select ticket_id, status, stage from tickets order by rowid`), [
     { ticket_id: 'T-1', status: 'in_progress', stage: 'implement' },
@@ -421,7 +397,7 @@ test('a ticket whose PR merged has its leftover worktrees removed, and another t
   // given
   // ... the project is a git repository, ticket 1's PR has merged, and worktrees of ticket 1's fixer and ticket 2's implementer are left under the worktree root
   const { run, db, root } = await freshProject()
-  await sqliteTracker(run, root, `insert into tickets values (1, 'in_review'), (2, 'in_review');`, ['https://git/pr/1'])
+  const t = memTracker({ 1: 'in_review', 2: 'in_review' }, [], { 'https://git/pr/1': 'merged' })
   await sql(run, db, `insert into tickets (ticket_id, title, status, pr_url) values ('1', 'one', 'pr_open', 'https://git/pr/1'), ('2', 'two', 'pr_open', 'https://git/pr/2')`)
   for (const argv of [['git', 'init', '-q'], ['git', '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'root']]) assert.equal((await run(argv)).exitCode, 0, argv.join(' '))
   const home = mkdtempSync(join(tmpdir(), 'pipeline-home-'))
@@ -432,7 +408,7 @@ test('a ticket whose PR merged has its leftover worktrees removed, and another t
 
   // when
   // ... a pass runs
-  const log = await pass(deps(run, [], false, 's1', { root, home }).d)
+  const log = await pass({ ...deps(run, [], false, 's1', { root, home }).d, tracker: t.tracker })
 
   // then
   // ... ticket 1's worktree is gone from disk and from git, ticket 2's stands, and the pass says what it removed
@@ -447,7 +423,7 @@ test('a ticket marked done in the tracker has its leftover worktree removed', as
   // given
   // ... the project is a git repository, ticket 1 is done in the tracker (its PR unmerged) and pr_open in the table, and its verifier left a worktree
   const { run, db, root } = await freshProject()
-  await sqliteTracker(run, root, `insert into tickets values (1, 'done');`, [])
+  const t = memTracker({ 1: 'done' })
   await sql(run, db, `insert into tickets (ticket_id, title, status, pr_url) values ('1', 'one', 'pr_open', 'https://git/pr/1')`)
   for (const argv of [['git', 'init', '-q'], ['git', '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'root']]) assert.equal((await run(argv)).exitCode, 0, argv.join(' '))
   const home = mkdtempSync(join(tmpdir(), 'pipeline-home-'))
@@ -456,7 +432,7 @@ test('a ticket marked done in the tracker has its leftover worktree removed', as
 
   // when
   // ... a pass runs
-  const log = await pass(deps(run, [], false, 's1', { root, home }).d)
+  const log = await pass({ ...deps(run, [], false, 's1', { root, home }).d, tracker: t.tracker })
 
   // then
   // ... the ticket is done in the table and its worktree is gone
@@ -479,7 +455,7 @@ test('a difficulty 1-2 ticket is told to open a normal PR and goes straight to p
 
   // then
   // ... the implementer was told not to use the prefix, the ticket is pr_open and no reviewer started
-  assert.match(spawned[0]?.prompt ?? '', /without a "Draft: " title prefix/)
+  assert.match(spawned[0]?.prompt ?? '', /`pr_create` with `draft: false`/)
   assert.deepEqual(spawned.map(s => s.description), ['pipeline T-1'])
   assert.deepEqual(await sql(run, db, `select status, pr_url from tickets`), [{ status: 'pr_open', pr_url: 'https://git/pr/1' }])
 })
@@ -558,6 +534,25 @@ for (const [stage, role, model] of [
     assert.match(log.join('\n'), new RegExp(`T-1 ${role} vanished; restarting it once`))
   })
 }
+
+test('the fixer of a stacked ticket is told the PR it is stacked on, its base', async () => {
+  // given
+  // ... ticket 2 at stage fix, not yet started, with its PR stacked on ticket 1's open PR
+  const { run, db } = await freshProject()
+  await sql(run, db, `insert into tickets (ticket_id, title, status, stage, started, model, difficulty, pr_url, stacked_on) values
+    ('1', 'one', 'pr_open', null, 0, 'sonnet', 3, 'https://git/pr/1', null), ('2', 'two', 'in_progress', 'fix', 0, 'sonnet', 3, 'https://git/pr/2', '1')`)
+  const { d, spawned } = deps(run, [])
+
+  // when
+  // ... a pass runs
+  await pass(d)
+
+  // then
+  // ... the fixer's prompt names its own PR and the one it is stacked on
+  assert.deepEqual(spawned.map(s => s.description), ['pipeline 2 fixer'])
+  assert.match(spawned[0]?.prompt ?? '', /^PR: https:\/\/git\/pr\/2$/m)
+  assert.match(spawned[0]?.prompt ?? '', /^Stack on: https:\/\/git\/pr\/1$/m)
+})
 
 test('a ticket whose verifier is gone without a result a second time goes to needs_human', async () => {
   // given
@@ -814,9 +809,9 @@ test('with stacking on, a ticket whose only blocker has its PR open is pulled in
   // ... ticket 2 waiting, blocked by ticket 1 whose PR is open, at stack depth 2
   const { run, db, root } = await freshProject()
   stackDepth(root, 2)
-  await sqliteTracker(run, root, `insert into tickets values (1, 'in_review'), (2, 'todo'); insert into links values (2, 1);`, [])
   await sql(run, db, `insert into tickets (ticket_id, title, status, pr_url) values ('1', 'one', 'pr_open', 'https://git/pr/1')`)
   const { d, spawned } = deps(run, [])
+  d.tracker = memTracker({ 1: 'in_review', 2: 'todo' }, [['2', '1']]).tracker
 
   // when
   // ... a pass runs
@@ -833,43 +828,23 @@ test('with stacking on, a ticket whose only blocker has its PR open is pulled in
   assert.doesNotMatch(spawned[0]?.prompt ?? '', /^Branch from:/m)
 })
 
-for (const missing of [STACK, RESTACK]) {
-  test(`with stacking on, a tracker.md without "## ${missing}" is logged as the tracker unreachable`, async () => {
-    // given
-    // ... stack depth 2 and a tracker.md without that section
-    const { run, root } = await freshProject()
-    stackDepth(root, 2)
-    await sqliteTracker(run, root, '', [], missing)
-
-    // when
-    // ... a pass runs
-    const log = await pass(deps(run, []).d)
-
-    // then
-    // ... it logs the section and the fix
-    assert.match(log.join('\n'), new RegExp(`tracker unreachable: tracker.md has no \\w+ under "## ${missing}"; run /tracker-setup`))
-  })
-}
-
-test('each pr_open stacked PR is brought up to date, bottom of the stack first, with its URL as literal text', async () => {
+test('each pr_open stacked PR is brought up to date, bottom of the stack first', async () => {
   // given
-  // ... at stack depth 4, ticket 1 pr_open at the bottom, 2 pr_open on it with a URL holding shell text, 3 pr_open on 2 (inserted before 2), and 4 in progress on 3
-  const url2 = `https://git/pr/2';touch hacked;'$(touch hacked)`
+  // ... at stack depth 4, ticket 1 pr_open at the bottom, 2 pr_open on it, 3 pr_open on 2 (inserted before 2), and 4 in progress on 3
   const { run, db, root } = await freshProject()
   stackDepth(root, 4)
-  await sqliteTracker(run, root, `insert into tickets values (1, 'in_review'), (2, 'in_review'), (3, 'in_review'), (4, 'in_progress');`, [])
+  const t = memTracker({ 1: 'in_review', 2: 'in_review', 3: 'in_review', 4: 'in_progress' })
   await sql(run, db, `insert into tickets (ticket_id, title, status, pr_url, stacked_on, owner) values
     ('1', 'one', 'pr_open', 'https://git/pr/1', null, null), ('3', 'three', 'pr_open', 'https://git/pr/3', '2', null),
-    ('2', 'two', 'pr_open', ${lit(url2)}, '1', null), ('4', 'four', 'in_progress', null, '3', 's1')`)
+    ('2', 'two', 'pr_open', 'https://git/pr/2', '1', null), ('4', 'four', 'in_progress', null, '3', 's1')`)
 
   // when
   // ... a pass runs with ticket 4's implementer live
-  await pass(deps(run, [live('pipeline 4')]).d)
+  await pass({ ...deps(run, [live('pipeline 4')]).d, tracker: t.tracker })
 
   // then
-  // ... ticket 2's PR then ticket 3's were brought up to date, nothing in the URL ran, and every ticket is where it was
-  assert.deepEqual(lines(root, 'restacked.txt'), [url2, 'https://git/pr/3'])
-  assert.equal(existsSync(join(root, 'hacked')), false)
+  // ... ticket 2's PR then ticket 3's were brought up to date, and every ticket is where it was
+  assert.deepEqual(t.restacked, ['https://git/pr/2', 'https://git/pr/3'])
   assert.deepEqual(await sql(run, db, `select status from tickets order by ticket_id`), [{ status: 'pr_open' }, { status: 'pr_open' }, { status: 'pr_open' }, { status: 'in_progress' }])
 })
 
@@ -878,16 +853,15 @@ test('a stacked PR that cannot be brought up to date sends its ticket to needs_h
   // ... at stack depth 2, ticket 2 pr_open stacked on ticket 1, and its PR conflicting with ticket 1's branch
   const { run, db, root } = await freshProject()
   stackDepth(root, 2)
-  await sqliteTracker(run, root, `insert into tickets values (1, 'in_review'), (2, 'in_review');`, [])
-  writeFileSync(join(root, 'conflicts.txt'), 'https://git/pr/2\n')
+  const t = memTracker({ 1: 'in_review', 2: 'in_review' }, [], {}, ['https://git/pr/2'])
   await sql(run, db, `insert into tickets (ticket_id, title, status, pr_url, stacked_on) values ('1', 'one', 'pr_open', 'https://git/pr/1', null), ('2', 'two', 'pr_open', 'https://git/pr/2', '1')`)
 
   // when
   // ... a pass runs
-  const log = await pass(deps(run, []).d)
+  const log = await pass({ ...deps(run, []).d, tracker: t.tracker })
 
   // then
-  // ... ticket 2 waits on a human, with a question naming the PR it is stacked on and the command's error
+  // ... ticket 2 waits on a human, with a question naming the PR it is stacked on and the op's error
   const [row] = await sql(run, db, `select status, question from tickets where ticket_id = '2'`)
   assert.equal(row?.status, 'needs_human')
   assert.match(String(row?.question), /https:\/\/git\/pr\/1/)
@@ -900,15 +874,14 @@ test('a PR closed without merging sends its ticket, and every ticket stacked on 
   // ... at stack depth 3, ticket 1's PR closed without merging, ticket 2 in progress stacked on it, ticket 4 pr_open stacked on 2, and ticket 3 pr_open on its own
   const { run, db, root } = await freshProject()
   stackDepth(root, 3)
-  await sqliteTracker(run, root, `insert into tickets values (1, 'in_review'), (2, 'in_progress'), (3, 'in_review'), (4, 'in_review');`, [])
-  writeFileSync(join(root, 'closed.txt'), 'https://git/pr/1\n')
+  const t = memTracker({ 1: 'in_review', 2: 'in_progress', 3: 'in_review', 4: 'in_review' }, [], { 'https://git/pr/1': 'closed' })
   await sql(run, db, `insert into tickets (ticket_id, title, status, pr_url, stacked_on, owner, restarts) values
     ('1', 'one', 'pr_open', 'https://git/pr/1', null, null, 0), ('2', 'two', 'in_progress', null, '1', 's1', 1), ('3', 'three', 'pr_open', 'https://git/pr/3', null, null, 0),
     ('4', 'four', 'pr_open', 'https://git/pr/4', '2', null, 0)`)
 
   // when
   // ... a pass runs with ticket 2's implementer live
-  const log = await pass(deps(run, [live('pipeline 2')]).d)
+  const log = await pass({ ...deps(run, [live('pipeline 2')]).d, tracker: t.tracker })
 
   // then
   // ... tickets 1, 2 and 4 wait on a human, 2's and 4's questions name the closed PR, and ticket 3 is untouched
@@ -920,20 +893,21 @@ test('a PR closed without merging sends its ticket, and every ticket stacked on 
   assert.match(log.join('\n'), /1 needs you: its PR was closed without merging/)
 })
 
-test('a merge check printing both merged and closed is logged as the tracker unreachable', async () => {
+test('a pr_merged result of both merged and closed is logged as the tracker unreachable', async () => {
   // given
-  // ... a ticket with its PR open and a merge check that prints both
-  const { run, db, root } = await freshProject()
-  await sqliteTracker(run, root, `insert into tickets values (1, 'in_review');`, [], undefined, { ...COMMANDS, [MERGED]: `echo '{"merged": true, "closed": true}'` })
+  // ... a ticket with its PR open and a tracker whose pr_merged returns both
+  const { run, db } = await freshProject()
   await sql(run, db, `insert into tickets (ticket_id, title, status, pr_url) values ('1', 'one', 'pr_open', 'https://git/pr/1')`)
+  const { d } = deps(run, [])
+  d.tracker = fakeTracker({ pr_merged: () => ({ merged: true, closed: true }) })
 
   // when
   // ... a pass runs
-  const log = await pass(deps(run, []).d)
+  const log = await pass(d)
 
   // then
-  // ... the answer is refused and the ticket stays pr_open
-  assert.match(log.join('\n'), /tracker unreachable: "Check whether a PR is merged" printed/)
+  // ... the result is refused and the ticket stays pr_open
+  assert.match(log.join('\n'), /tracker unreachable: tracker pr_merged returned \{"merged":true,"closed":true\} for https:\/\/git\/pr\/1/)
   assert.deepEqual(await sql(run, db, `select status from tickets`), [{ status: 'pr_open' }])
 })
 
@@ -942,12 +916,12 @@ test('a merged PR frees the tickets stacked on it, which are then no longer brou
   // ... at stack depth 2, ticket 1's PR merged and ticket 2 pr_open stacked on it
   const { run, db, root } = await freshProject()
   stackDepth(root, 2)
-  await sqliteTracker(run, root, `insert into tickets values (1, 'in_review'), (2, 'in_review');`, ['https://git/pr/1'])
+  const t = memTracker({ 1: 'in_review', 2: 'in_review' }, [], { 'https://git/pr/1': 'merged' })
   await sql(run, db, `insert into tickets (ticket_id, title, status, pr_url, stacked_on) values ('1', 'one', 'pr_open', 'https://git/pr/1', null), ('2', 'two', 'pr_open', 'https://git/pr/2', '1')`)
 
   // when
   // ... a pass runs
-  await pass(deps(run, []).d)
+  await pass({ ...deps(run, []).d, tracker: t.tracker })
 
   // then
   // ... ticket 1 is done, ticket 2 is stacked on nothing, and no PR was brought up to date
@@ -955,5 +929,5 @@ test('a merged PR frees the tickets stacked on it, which are then no longer brou
     { ticket_id: '1', status: 'done', stacked_on: null },
     { ticket_id: '2', status: 'pr_open', stacked_on: null },
   ])
-  assert.deepEqual(lines(root, 'restacked.txt'), [])
+  assert.deepEqual(t.restacked, [])
 })

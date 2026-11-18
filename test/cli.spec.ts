@@ -1,9 +1,8 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { CREATE, LINK_BLOCKER } from '../src/sync.ts'
 import { system, ticketPrompt } from '../src/triage.ts'
 import { freshProject } from './helpers.ts'
 
@@ -14,9 +13,8 @@ const draft = JSON.stringify({ title: 'Add login', body: 'Google sign-in.\n- a u
 const cli = (root: string, args: string[], input = '', env: NodeJS.ProcessEnv = process.env) =>
   spawnSync(process.execPath, [CLI, ...args], { cwd: root, input, encoding: 'utf8', env })
 
-/** Adds a section with `cmd` as its command to the project's tracker.md. */
-const addSection = (root: string, heading: string, cmd: string) =>
-  appendFileSync(join(root, '.claude/pipeline/tracker.md'), `## ${heading}\n\`\`\`sh\n${cmd}\n\`\`\`\n`)
+/** Writes the project mod's folder, as /tracker-setup leaves it; the stub `claude` stands in for what it answers. */
+const addMod = (root: string) => mkdirSync(join(root, '.claude/skills/pipeline-tracker'), { recursive: true })
 
 /** Puts a `claude` running `script` on a PATH the CLI is then run with; the rest of the env is only `extra`. */
 const stubClaude = (root: string, script: string, extra: Record<string, string> = {}) => {
@@ -26,70 +24,92 @@ const stubClaude = (root: string, script: string, extra: Record<string, string> 
   return { PATH: `${bin}:${process.env.PATH}`, ...extra }
 }
 
-test('tracker create hands the draft to tracker.md as JSON on stdin and prints the new ticket as one line', async () => {
+test("tracker create runs the mod's /pipeline-tracker command headless from the project root and prints the new ticket as one line", async () => {
   // given
-  // ... a create command that saves its stdin and prints a ticket, and a title holding shell text
+  // ... the mod, a stub claude saving its arguments and cwd and answering a ticket, and a title holding shell text
   const { root } = await freshProject()
-  addSection(root, CREATE, `cat > got.json\necho '{"id": "APS-7", "url": "https://t/APS-7"}'`)
+  addMod(root)
+  const env = stubClaude(root, `printf '%s\\0' "$@" > args\npwd -P > cwd\necho '{"id": "APS-7", "url": "https://t/APS-7"}'`)
   const shelly = { title: 'Quote `$HOME` and "$1"', body: '- [ ] works' }
 
   // when
   // ... it is created
-  const r = cli(root, ['tracker', 'create'], JSON.stringify(shelly))
+  const r = cli(root, ['tracker', 'create'], JSON.stringify(shelly), env)
 
   // then
-  // ... the command got the draft as data, and the CLI printed the id and url and nothing else
-  assert.deepEqual(JSON.parse(readFileSync(join(root, 'got.json'), 'utf8')), shelly)
+  // ... claude ran the create op with the draft as JSON, in the project root, and the CLI printed the id and url and nothing else
+  assert.deepEqual(readFileSync(join(root, 'args'), 'utf8').split('\0').slice(0, -1), ['-p', '--no-session-persistence', `/pipeline-tracker create ${JSON.stringify(shelly)}`])
+  assert.equal(readFileSync(join(root, 'cwd'), 'utf8'), `${realpathSync(root)}\n`)
   assert.deepEqual([r.status, r.stdout, r.stderr], [0, '{"id":"APS-7","url":"https://t/APS-7"}\n', ''])
 })
 
-test('tracker create fails when the command prints an id that is not one path segment', async () => {
+test('tracker create fails when the op returns an id that is not one path segment', async () => {
   // given
-  // ... a create command printing out.txt, and outputs with a reference, `..`, an empty id, a number and no JSON
+  // ... the mod, a stub claude printing out.txt, and results with a reference, `..`, an empty id, a number and no JSON
   const { root } = await freshProject()
-  addSection(root, CREATE, 'cat out.txt')
+  addMod(root)
+  const env = stubClaude(root, `cat "${root}/out.txt"`)
   const printed = ['{"id": "owner/repo#7", "url": null}', '{"id": "..", "url": null}', '{"id": "", "url": null}', '{"id": 7, "url": null}', 'created #7']
 
   // when
   // ... a draft is created against each
   const results = printed.map(out => {
     writeFileSync(join(root, 'out.txt'), out)
-    return cli(root, ['tracker', 'create'], draft)
+    return cli(root, ['tracker', 'create'], draft, env)
   })
 
   // then
-  // ... each exits 1 with nothing on stdout and one line on stderr naming the command
+  // ... each exits 1 with nothing on stdout and one line on stderr naming the op
   assert.deepEqual(results.map(r => [r.status, r.stdout]), printed.map(() => [1, '']))
-  for (const r of results) assert.match(r.stderr, /^pipeline tracker create: "Create a ticket" printed [^\n]*, not \{"id": "<one path segment>"[^\n]*\n$/)
+  for (const r of results) assert.match(r.stderr, /^pipeline tracker create: tracker create (returned [^\n]*, not \{"id": "<one path segment>"|printed "created #7", not JSON)[^\n]*\n$/)
 })
 
-test('a tracker.md without the create command says to run /tracker-setup', async () => {
+test('tracker create fails with the error the /pipeline-tracker command answered', async () => {
   // given
-  // ... a tracker.md written before the create command existed
+  // ... the mod, and a stub claude answering the op's error and exiting 1, as the command does when the op fails
   const { root } = await freshProject()
+  addMod(root)
+  const env = stubClaude(root, `echo 'jira: auth expired'\nexit 1`)
 
   // when
   // ... a draft is created
-  const r = cli(root, ['tracker', 'create'], draft)
+  const r = cli(root, ['tracker', 'create'], draft, env)
 
   // then
-  // ... it exits 1 naming the missing section
-  assert.deepEqual([r.status, r.stderr], [1, 'pipeline tracker create: tracker.md has no command under "## Create a ticket"; run /tracker-setup\n'])
+  // ... it exits 1 with the error on one line
+  assert.deepEqual([r.status, r.stdout, r.stderr], [1, '', 'pipeline tracker create: tracker create failed (exit 1): jira: auth expired\n'])
 })
 
-test('tracker link-blocker passes the ticket and its blocker as $1 and $2 and prints nothing', async () => {
+test('without the tracker mod, tracker create says to run /tracker-setup and runs no claude', async () => {
   // given
-  // ... a link command that saves its arguments
+  // ... a project with no mod, and a stub claude that records being run
   const { root } = await freshProject()
-  addSection(root, LINK_BLOCKER, `printf '%s blocked by %s' "$1" "$2" > linked.txt`)
+  const env = stubClaude(root, `touch "${root}/ran"`)
+
+  // when
+  // ... a draft is created
+  const r = cli(root, ['tracker', 'create'], draft, env)
+
+  // then
+  // ... it exits 1 naming the fix, and claude never ran
+  assert.deepEqual([r.status, r.stderr], [1, 'pipeline tracker create: no pipeline tracker mod here (.claude/skills/pipeline-tracker); run /tracker-setup\n'])
+  assert.equal(existsSync(join(root, 'ran')), false)
+})
+
+test('tracker link-blocker runs the link_blocker op with the ticket and its blocker and prints nothing', async () => {
+  // given
+  // ... the mod, and a stub claude saving its arguments and answering ok
+  const { root } = await freshProject()
+  addMod(root)
+  const env = stubClaude(root, `printf '%s\\0' "$@" > args\necho '"ok"'`)
 
   // when
   // ... APS-7 is linked as blocked by APS-3
-  const r = cli(root, ['tracker', 'link-blocker', 'APS-7', 'APS-3'])
+  const r = cli(root, ['tracker', 'link-blocker', 'APS-7', 'APS-3'], '', env)
 
   // then
-  // ... the command got both ids and the CLI printed nothing
-  assert.equal(readFileSync(join(root, 'linked.txt'), 'utf8'), 'APS-7 blocked by APS-3')
+  // ... claude ran the op with both ids and the CLI printed nothing
+  assert.deepEqual(readFileSync(join(root, 'args'), 'utf8').split('\0').slice(0, -1), ['-p', '--no-session-persistence', '/pipeline-tracker link_blocker {"id":"APS-7","blocked_by":"APS-3"}'])
   assert.deepEqual([r.status, r.stdout, r.stderr], [0, '', ''])
 })
 

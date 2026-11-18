@@ -20,12 +20,14 @@ built-in `/loop`. It is a small mod (`hooks/register.ts`) that runs in the backg
   of the loop. Timers fire while the session is idle. A pass that is still running makes the next tick a no-op.
 - Triage calls Haiku directly (`$.model.complete`), off the main thread.
 - Implementation is a background subagent (`$.agent.spawn` with the routed model), off the main thread.
-- SQLite and the tracker.md commands are run with `$.process.run`, from the project root.
+- SQLite is run with `$.process.run`, from the project root. The tracker and the PR host are reached through the
+  project's tracker tool, with `$.tool.call` (below).
 - Several sessions with the pipeline loaded may share one project. Each pass first stamps `owner_seen` on the
   `in_progress` tickets its session owns (the heartbeat); an owner unseen for 3 pass intervals (15 minutes) is
   taken as stopped. Sync, the merge check and triage need no owner: they are idempotent across sessions.
-- Without `.claude/pipeline/tracker.md`, `readiness.md`, `rubric.md` and `routing.md` a pass only logs
-  "run /tracker-setup".
+- Without `.claude/pipeline/readiness.md`, `rubric.md` and `routing.md` a pass only logs "run /tracker-setup".
+  Without the tracker tool it logs "no pipeline tracker tool here; run /tracker-setup", skips steps 1 to 3 and runs
+  the rest.
 
 One pass of the loop (`src/loop.ts`), in order:
 1. Done: each `pr_open` ticket whose PR has merged is marked done in the tracker and in the table, so sync
@@ -34,8 +36,8 @@ One pass of the loop (`src/loop.ts`), in order:
 2. Restack (only with `Stack depth:` above 1): each `pr_open` ticket stacked on another has its PR brought up to
    date with the PR under it, bottom of the stack first; a failure sends it to needs_human with the error.
 3. Sync: pull new and changed tickets into SQLite (`src/sync.ts`, TypeScript).
-   A tracker command that fails or times out in steps 1 to 3 is logged as "tracker unreachable: <reason>" and the
-   pass goes on with the tickets already in the table.
+   A tracker op that fails in steps 1 to 3 (the tool's error, a timeout inside the mod, a result of another shape)
+   is logged as "tracker unreachable: <reason>" and the pass goes on with the tickets already in the table.
 4. Triage every ticket with status new, with the ticket body and the user's answers so far (`src/triage.ts`). A
    ticket whose triage fails stays new and is retried next pass.
 5. Stages: only the session that claimed an `in_progress` ticket (its `owner`) moves it on, since
@@ -67,41 +69,55 @@ One pass of the loop (`src/loop.ts`), in order:
 8. Never wait on a human. Anything that needs one is set to needs_human with the question, and the loop
    moves on.
 
-### The tracker.md command contract
-The mod runs these tracker.md commands itself. Each is the first fenced block under a heading spelled exactly
-as below, run with `sh -c` from the project root. A tracker.md missing any of them, or a command that exits
-non-zero, times out or prints another shape, ends the done and sync steps of that pass with "tracker unreachable:
-<reason>" logged; the rest of the pass still runs.
+### The tracker tool
+`/tracker-setup` writes a project mod, `pipeline-tracker`, into `<project>/.claude/skills/pipeline-tracker/`, where
+it loads automatically. It registers one tool, `tracker` (`mcp__pipeline-tracker__tracker`, never deferred), whose
+input is `{op, ...args}` and which covers both the tracker and the PR host, implemented with whatever reaches them:
+`$.mcp.call`, `$.http.fetch` or `$.process.run`. The pipeline plugin ships no adapter. Each op is bounded at 30
+seconds inside the mod, retries nothing, and on a failure answers an error naming the reason.
 
-| heading | prints |
-|---|---|
-| `## List the tickets waiting to be worked` | JSON array of `{id, title, url, body}`; `body` is the description plus acceptance criteria; epics are filtered by the command |
-| `## List the tickets that are done` | JSON array of `{id}` |
-| `## List the blockers` | JSON array of `{id, blocked_by, blocker_done}`, one row per link from a waiting ticket; `[]` when the tracker has no links |
-| `## Check whether a PR is merged` | `{"merged": true}`, `{"merged": false}` (open) or `{"merged": false, "closed": true}` (closed without merging); gets the PR URL as `$1` |
-| `## Mark a ticket done` | nothing; gets the tracker ticket id as `$1`, must succeed when it is already done |
-| `## Bring a stacked PR up to date` | only with `Stack depth:` above 1; nothing; gets the PR URL as `$1`, brings its branch up to date with its base on the host without touching a local checkout, exits 0 when already up to date and non-zero on a conflict or any failure |
+| `op` | input | returns |
+|---|---|---|
+| `waiting` | none | `[{id, title, url, body}]`; `body` is the description plus acceptance criteria; epics and other containers left out |
+| `done` | none | `[{id}]` |
+| `blockers` | none | `[{id, blocked_by, blocker_done}]`, one row per link from a waiting ticket; `[]` when the tracker has no links |
+| `mark_done` | `id` | ok; succeeds when the ticket is already done |
+| `create` | `title`, `body` | `{id, url}`, the ticket created in a waiting status; `id` is one path segment |
+| `link_blocker` | `id`, `blocked_by` | ok; `blockers` then returns the link |
+| `read` | `id` | `{id, title, url, body, comments: [{author, at, text}]}` |
+| `move` | `id`, `status` (`in_progress`, `in_review`, `done`) | ok; the mod maps the pipeline's statuses to the board's |
+| `comment` | `id`, `text` | ok |
+| `link_pr` | `id`, `url` | ok |
+| `pr_create` | `branch`, `title`, `body`, `draft`, `base?` | `{url}`; `base` is the head branch of the PR to stack on, else the default branch |
+| `pr_view` | `url` | `{title, branch, head, draft, merged}` |
+| `pr_merged` | `url` | `{merged: true}`, `{merged: false}` (open) or `{merged: false, closed: true}` (closed without merging) |
+| `pr_diff` | `url` | the diff, as text |
+| `pr_comment` | `url`, `text` | ok |
+| `pr_comments` | `url` | `[{author, at, text, path?, line?}]`, general and inline together |
+| `pr_edit` | `url`, `title?`, `body?` | ok |
+| `pr_ready` | `url` | ok |
+| `pr_restack` | `url` | ok once the PR's branch is up to date with its base, on the host, touching no local checkout; an error on a conflict |
 
-Two more are run by the CLI (`bin/pipeline.ts`), never by the mod, so a tracker.md without them still syncs and only
-the CLI fails, with "run /tracker-setup":
+Ids are strings or integers; `url` and `body` may be null; `blocker_done` is true or false (1 or 0). `pr_create`
+with `draft: true` opens a host draft titled `Draft: <title>`, and `pr_ready` marks it ready on the host and strips
+the prefix in one call; on a host without drafts the prefix alone marks it. `git push` stays plain git: the mod runs
+no git.
 
-| heading | contract |
-|---|---|
-| `## Create a ticket` | reads `{"title", "body"}` JSON on stdin, `body` markdown; creates the ticket in a waiting status, so the next sync pulls it in; prints `{"id", "url"}`, `id` a string that is one path segment, `url` null when there is none |
-| `## Link a blocker` | nothing; gets the ticket id as `$1` and its blocker's id as `$2`, records the link so the blockers command prints it, exits 0 on success |
+The loop's `Deps` carry a `tracker(op, args)` call over `$.tool.call`, looked up in `$.tool.list()` each pass so the
+mod may load, reload or go away while the session runs, or null when the tool is not there. Steps 1 to 3 use
+`pr_merged`, `mark_done`, `pr_restack`, `waiting`, `done` and `blockers`, and check every result's shape; a result of
+another shape is a failure. The agents, `/learn` and `/pipeline-status` use the tool too, and never a host's CLI.
 
-With `Stack depth:` above 1, tracker.md also needs `## Open a stacked PR`: instructions the implementer follows (how
-to find a PR's head branch and open a PR stacked on a given PR), not run by the mod. Without either section the done
-and sync steps fail with "run /tracker-setup". Design: `docs/specs/stacked-prs.md`.
+The mod also registers the command `/pipeline-tracker <op> <json args>`, whose `command.run` hook runs the op and
+answers the result as JSON with exit code 0, or the error with 1, with no model turn. The CLI runs it in a headless
+`claude -p` (below).
 
-`$1` is passed as an argument (`sh -c '<command>' sh <value>`), never spliced into the command text.
-The agents and skills also follow the rest of tracker.md (read a ticket, move a status, add a comment, link a PR,
-the status mapping). Design: `docs/specs/dependency-flow.md`.
+Design: `docs/specs/tracker-mod.md`, after `docs/specs/dependency-flow.md` and `docs/specs/stacked-prs.md`.
 
 ### Blocked tickets
 A waiting ticket with a blocker that is not done is held: sync does not insert it, and removes it while it is
 `new` or `ready`. A held ticket has no row and no status. It enters the table once its blockers are done.
-`/pipeline-status` lists held tickets live from the blockers command.
+`/pipeline-status` lists held tickets live from the tracker tool's `blockers` op.
 
 With routing.md's `Stack depth:` above 1, a waiting ticket whose only unfinished blocker B is `pr_open` with a
 `pr_url` is released with `stacked_on = B`, provided B's stack (B, the ticket B is stacked on, and so on down to a
@@ -168,18 +184,19 @@ merged PR or by the tracker's own done list, the pass removes every worktree lef
 
 ### Agent review (difficulty at or above the review threshold)
 Design: `docs/specs/agent-review.md`. The threshold is routing.md's `Review threshold: <n>` line (3 when the line is
-missing). Such a ticket's implementer opens its PR as a draft on the host (on GitHub: `gh pr create --draft`) with a `Draft: ` title prefix. Then, all at status
+missing). Such a ticket's implementer opens its PR with `pr_create` and `draft: true`: a host draft titled
+`Draft: <title>`. Then, all at status
 `in_progress`, the `stage` column moves `implement` → `review` → `verify` → (`fix`) and each stage's agents run:
 
 - `reviewer-spec` and `reviewer-quality`, read-only, on opus whatever the routed model (fable eats tokens, so
   review never escalates to it): each reads the ticket, any spec it references and the PR at its head commit, and
   posts its findings as one ticket comment.
 - `verifier`, on opus too: checks each finding against the code, drops false ones, merges duplicates, posts
-  the checked list under the heading `Checked review findings` on the ticket and the PR, marks the PR ready
-  on the host (on GitHub: `gh pr ready`) and removes the `Draft: ` prefix when none are left, and reports the count.
+  the checked list under the heading `Checked review findings` on the ticket and the PR, calls `pr_ready` (ready on
+  the host, `Draft: ` prefix gone) when none are left, and reports the count.
 - `fixer`, on the routed model: addresses the checked findings on the same branch and PR, comments on the PR what
-  it fixed and why not the rest under the heading `Fixer notes`, marks the PR ready on the host, removes the
-  `Draft: ` prefix and reports.
+  it fixed and why not the rest under the heading `Fixer notes`, calls `pr_ready` and reports. A stacked ticket's
+  fixer gets a `Stack on: <pr_url>` line, so it diffs against that PR's branch, its PR's base.
 
 One round only. Every stage is read from the table and the live agents each pass, so a reload or restart picks up
 where it was. An agent that cannot be spawned sends the ticket to needs_human with the PR still a draft.
@@ -211,7 +228,8 @@ error in either hook (a sqlite failure, a bad limit line in routing.md) is logge
 ### Permissions and notices
 The loop's agents run unattended. A `tool.check` hook allows every tool call of the loop's agents (described
 `pipeline <ticket>` for the implementer, `pipeline <ticket> <role>` for the review agents)
-that would otherwise prompt. Deny rules and an organization ceiling still apply, so keep `git push --force` and
+that would otherwise prompt, and so does the loop's own call of the tracker tool, which carries no agent. Deny rules
+and an organization ceiling still apply, so keep `git push --force` and
 PR merges denied in settings if merging should stay with you. A `prompt.submit` hook drops the completion
 notice of those agents, which would start a turn on the main thread; you still see a one-line log per event.
 
@@ -227,25 +245,32 @@ goes back to new or ready.
 ## Pieces
 
 ### `/tracker-setup` (skill)
-A conversation between the user and Claude. Claude finds what is available for this project's tracker
-(an MCP server, `gh`, a Jira API key, anything else), reads the board's statuses, and writes
-`.claude/pipeline/tracker.md`: the five commands above, the CLI's create and link commands (checked by shape, never run, so
-nothing is posted to a shared board), the two stacked PR sections when the user wants stacking
-(and `Stack depth:` in routing.md), plus how to read one ticket (printed as markdown or plain text, never ADF), move a status, add a
-comment and link a PR, and the status mapping. It then copies the defaults for `readiness.md`, `rubric.md` and
-`routing.md` from `skills/tracker-setup/defaults/` into `.claude/pipeline/` when absent. No adapter code. A new
-tracker means running this skill again; run again on a tracker.md that lacks sections, it adds only those. A tracker reachable only through an MCP server, with no CLI or HTTP API,
-cannot be synced, because the mod runs the commands itself.
-Credentials stay in env vars or the tool's own login, never in the file.
+A conversation between the user and Claude, in seven steps: find the MCP servers or CLIs that reach the tracker and
+the PR host (often two systems) and check they are connected; read the board's statuses and agree the mapping;
+translate an existing `tracker.md` or `tracker.sh` into the mod; write the mod, its README (the status mapping and
+what each op calls) and its contract tests (one per op, writes included, with the MCP, HTTP and shell calls
+answered from saved responses); run the read ops live once (`waiting`, `done`, `blockers`, `read`, `pr_view`,
+`pr_merged`), keeping the responses as the tests' saved responses, then the tests with `claude plugin test`, saving
+nothing until both pass and never writing to a real ticket or PR; ask whether to commit the mod, gitignore it or
+exclude it through `.git/info/exclude`; and copy the defaults for `readiness.md`, `rubric.md` and `routing.md` from
+`skills/tracker-setup/defaults/` into `.claude/pipeline/` when absent (with `Stack depth:` in routing.md when the
+user wants stacked PRs), gitignoring `.claude/pipeline/pipeline.db`. A new tracker or PR host means running it
+again; it rewrites the mod. Credentials stay with the MCP server's or CLI's own login or in an env var the mod
+names, never in the mod.
 
 ### `bin/pipeline.ts` (CLI)
 Adds work without an agent or a session, for a UI or a script, run from the project root as
 `node <plugin>/bin/pipeline.ts <command>`. Output is one line of JSON or nothing; any failure exits 1 with one line on
 stderr naming what failed.
-- `tracker create`: `{"title", "body"}` on stdin, passed on as the stdin of `## Create a ticket`; prints its
+- `tracker create`: `{"title", "body"}` on stdin; runs the mod's `create` op as
+  `claude -p --no-session-persistence "/pipeline-tracker create <json>"` from the project root, and prints its
   `{"id", "url"}` once the id passes the same one-path-segment rule as the worktree guard (`namesWorktree`).
-- `tracker link-blocker <id> <blocker>`: runs `## Link a blocker` with them as `$1` and `$2`, both checked
-  against that rule first.
+- `tracker link-blocker <id> <blocker>`: runs the `link_blocker` op the same way, both ids checked against that
+  rule first.
+
+Both fail with "run /tracker-setup" when the project has no `.claude/skills/pipeline-tracker/`, and with the
+command's error when it exits non-zero. `claude -p` runs with every inherited `CLAUDE*` variable unset but the two
+that pick the login, as for `triage-preview`.
 - `triage-preview`: `{"title", "body"}` on stdin; triages the draft as the loop would triage it as a ticket, with
   triage's own system and ticket prompts (`system`, `ticketPrompt`), `parseVerdict`, and `decide`, the one function
   that turns a verdict and routing.md's confidence threshold into ready or needs_human. With no session there is no
@@ -316,16 +341,18 @@ triage judged ready goes to you to confirm; a malformed value fails triage of ev
 
 ### Implementers (`agents/implementer-sonnet.md`, `-opus.md`, `-fable.md`)
 Spawned by the loop for the routed model. Each reads the ticket, works in its own worktree, implements it, runs the
-tests, opens its own PR and links it on the tracker using tracker.md. It finishes by calling `report_result`, described above. Its prompt says whether to open the PR as a draft on the host with the `Draft: `
-title prefix. A `Branch from: origin/<default>` line names the ref it fetches and cuts its branch from. A
-`Stack on: <pr_url>` line, in its place, means the PR stacks on that PR: the implementer finds its head branch and
-opens the PR following tracker.md's `## Open a stacked PR`, branches from that head, and diffs against it.
+tests, opens its own PR with `pr_create` and links it on the ticket with `link_pr`, all through the tracker tool. It
+finishes by calling `report_result`, described above. Its prompt says whether `pr_create` gets `draft: true`. A
+`Branch from: origin/<default>` line names the ref it fetches and cuts its branch from. A `Stack on: <pr_url>` line,
+in its place, means the PR stacks on that PR: the implementer finds its head branch with `pr_view`, branches from
+it, diffs against it, and passes it to `pr_create` as `base`.
 
 ### Review agents (`agents/reviewer-spec.md`, `reviewer-quality.md`, `verifier.md`, `fixer.md`)
 One file per role; the model is passed at spawn. Described above under agent review.
 
 ### `/learn` (skill)
-Finds PRs in SQLite with learned = false. For each, reads the human review comments, the verifier's
+Finds PRs in SQLite with learned = false. For each, reads through the tracker tool (`pr_comments`, `pr_view`,
+`pr_merged`) the human review comments, the verifier's
 `Checked review findings` and the fixer's `Fixer notes`; a PR with agent findings and no human comments is
 processed too. A finding the fixer fixed is a confirmed implementer mistake; one it declined is shown to the
 human with the fixer's reason as a judgement call. Confirmed mistakes are grouped by kind across the PRs of the

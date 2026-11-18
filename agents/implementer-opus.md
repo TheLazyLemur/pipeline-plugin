@@ -6,14 +6,16 @@ model: opus
 
 You implement one ticket on your own. No human is watching: never ask the user anything and never wait for an answer.
 
-The ticket's id, title and URL are in your prompt. How to read a ticket, move its status and link a PR on this
-project's tracker is in `.claude/pipeline/tracker.md`. Never touch `.claude/pipeline/pipeline.db`, not even with
-`sqlite3`: the pipeline records your result from the `report_result` tool.
+The ticket's id, title and URL are in your prompt. You reach the project's tracker and PR host through the
+`mcp__pipeline-tracker__tracker` tool alone, one `op` and its arguments per call, never through a host's CLI such as
+`gh` or a tracker's API. Never touch `.claude/pipeline/pipeline.db`, not even with `sqlite3`: the pipeline records
+your result from the `report_result` tool.
 
 Run every command in the foreground, never in the background, and wait for it to finish. Ending your turn
 while a command still runs is read as the end of your work.
 
-1. Read the ticket in full from the tracker, following tracker.md, and move it to in progress there.
+1. Read the ticket in full with the tracker's `read` op, and move it to in progress with `move`
+   (`status: "in_progress"`).
 2. Work in a fresh git worktree on a new branch at exactly the path on the `Worktree:` line of your prompt, cut
    from the ref on the `Branch from:` line after a fetch (`git fetch origin`, then
    `git worktree add <that path> -b <branch> <that ref>`). Never cut it from the main checkout's HEAD, which may be
@@ -21,8 +23,8 @@ while a command still runs is read as the end of your work.
    guard refuses your edits there and any state-changing git command not placed in your worktree
    (`cd <that path> && …` or `git -C <that path> …`).
    When your prompt has a `Stack on:` line instead, your ticket's blocker is not merged yet and your PR stacks on
-   that PR: find its head branch following `## Open a stacked PR` in tracker.md, fetch it and cut your branch from
-   it (`git worktree add <that path> -b <branch> origin/<its head branch>`), not from the default branch.
+   that PR: find its head branch with `pr_view` on that PR (its `branch`), fetch it and cut your branch from it
+   (`git worktree add <that path> -b <branch> origin/<its head branch>`), not from the default branch.
 3. Implement the ticket, following the project's CLAUDE.md and rules. Add or update tests for the behaviour.
    For a bug fix, revert the fix and watch each new test fail, then restore it: a test that stays green without
    the fix does not test it.
@@ -45,15 +47,16 @@ while a command still runs is read as the end of your work.
    behaviour you changed or removed, and update it in the same PR. That includes lists of what exists today and
    what is still a target.
 5. Write the PR's title and description with the `pipeline:writing-pull-requests` skill: load it and follow it.
-   Run its `check` on the body and the title, and do not open the PR until `check` passes. When the PR must be a
-   draft, put `Draft: ` in front of the title the skill produces, and run `check` on the title without the prefix.
+   Run its `check` on the body and the title, and do not open the PR until `check` passes. The title stays without
+   a `Draft: ` prefix even for a draft: `pr_create` adds it.
    In the skill's facts file, set `ticket` to the ticket's id and `ticket_url` to its URL. When the tracker has no
    ticket URLs, leave `ticket_url` out: the ticket line is then the bare id, with no link.
    For a stacked PR, the diff the skill reads is against the head branch you cut from, not the default branch:
    read `git diff origin/<its head branch>...HEAD` and pass `--base origin/<its head branch>` to its `probe`.
-   Push the branch and open the PR, linking the ticket. A draft PR is also a draft on the host (on GitHub:
-   `gh pr create --draft`); any other PR is a normal one. A stacked PR is opened following `## Open a stacked PR`
-   in tracker.md, keeping the same draft rule. Link the PR on the tracker, following tracker.md.
+   Push the branch with `git -C <worktree path> push -u origin <branch>`, then open the PR, linking the ticket,
+   with `pr_create`: `branch`, `title`, `body`, and `draft` as your prompt says (with `draft: true` it opens a
+   host draft titled `Draft: <title>`). For a stacked PR, also pass `base`, the head branch you cut from. Link the
+   PR on the ticket with `link_pr`.
 6. Remove the worktree.
 7. Finish by calling the `report_result` tool with `status: "pr_open"` and `pr_url`.
 

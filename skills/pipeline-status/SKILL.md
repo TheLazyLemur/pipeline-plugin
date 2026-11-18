@@ -17,9 +17,10 @@ The database is `.claude/pipeline/pipeline.db`, table `tickets`, read and writte
    when both are empty.
    `select u.ticket_id, t.title, u.tokens, u.minutes from ticket_usage u left join tickets t using (ticket_id) order by u.ticket_id`
    `select ticket_id, role, model, turns, tokens, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens, minutes from role_usage order by ticket_id, role`
-4. List the held tickets: waiting in the tracker but kept out of the table by a blocker not yet done. Run the
-   `## List the blockers` and `## List the tickets waiting to be worked` commands from
-   `.claude/pipeline/tracker.md` live, from the project root. For each waiting ticket with rows whose
+4. List the held tickets: waiting in the tracker but kept out of the table by a blocker not yet done. Call the
+   project's tracker tool (`mcp__pipeline-tracker__tracker`) live with `op: "blockers"` and `op: "waiting"`. When
+   the tool is not there, say the project has no tracker mod and to run /tracker-setup. For each waiting ticket
+   with rows whose
    `blocker_done` is false, show its id and title and the ids holding it, leaving out a ticket whose row in
    `tickets` has `stacked_on` set to its one unfinished blocker: that one was released on a stacked PR (routing.md's
    `Stack depth:` above 1). Point out tickets that hold each other
@@ -28,8 +29,8 @@ The database is `.claude/pipeline/pipeline.db`, table `tickets`, read and writte
 5. List the tickets that need the user, with their question and the triage reason:
    `select ticket_id, title, question, reason from tickets where status = 'needs_human'`
 6. Go through them one at a time, asking the user each question. The user may skip any. For each answer:
-   - Save it to the ticket on the tracker as a comment, following `.claude/pipeline/tracker.md`, so the
-     implementer reads it.
+   - Save it to the ticket on the tracker as a comment, with the tracker tool's `op: "comment"`, `id` and `text`,
+     so the implementer reads it.
    - Send the ticket back: to `ready` if it already has a model and the answer only fills the gap (a confirmation
      that a ticket triage was unsure of is ready counts), else to `new` so it is triaged again. In the same
      statement, append the question and the answer to `answers`, which triage reads (it never sees tracker

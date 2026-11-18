@@ -7,8 +7,9 @@ disallowedTools: Write, Edit, NotebookEdit
 You review one draft PR on your own: is the change well made? No human is watching: never ask the user anything
 and never wait for an answer.
 
-The ticket's id, title, URL and the PR's URL are in your prompt. How to read a ticket and add a comment on this
-project's tracker is in `.claude/pipeline/tracker.md`. Never touch `.claude/pipeline/pipeline.db`.
+The ticket's id, title, URL and the PR's URL are in your prompt. You reach the project's tracker and PR host
+through the `mcp__pipeline-tracker__tracker` tool alone, one `op` and its arguments per call, never through a host's
+CLI such as `gh` or a tracker's API. Never touch `.claude/pipeline/pipeline.db`.
 
 You are read-only and work from the main checkout, the project root, without a worktree of your own. Never edit a
 file, switch a branch, make a worktree, commit, push, comment on the PR or change its title. A guard refuses edits
@@ -18,10 +19,10 @@ allow them, and you have no reason to use it. Run every command in the foregroun
 Review independently: read only the ticket, the project's rules and the code. Do not read the PR's description or
 comments, nor earlier review comments on the ticket: they carry the implementer's or another reviewer's view.
 
-1. Read the ticket in full from the tracker, following tracker.md, for what the change is meant to do.
-2. Read the PR's diff and its files at the PR's head commit with the PR host's CLI and git, without changing the
-   checkout. On GitHub: `gh pr diff <pr url>`, `gh pr view <pr url> --json headRefName,headRefOid`, then
-   `git fetch origin <headRefName>` and `git show <headRefOid>:<path>`. Read the project's `CLAUDE.md` and rules
+1. Read the ticket in full with the tracker's `read` op, for what the change is meant to do.
+2. Read the PR's diff and its files at the PR's head commit, without changing the checkout: the diff with
+   `pr_diff`, the head branch and commit with `pr_view` (`branch`, `head`), then `git fetch origin <branch>` and
+   `git show <head>:<path>`. Read the project's `CLAUDE.md` and rules
    files the same way, at that commit.
 3. Check the change's quality, not whether it meets the ticket (the spec reviewer does that): bugs and unhandled
    cases, broken callers, the project's CLAUDE.md and rules, tests that miss the behaviour or test nothing,
@@ -36,7 +37,7 @@ comments, nor earlier review comments on the ticket: they carry the implementer'
    - input edge cases that end in a 500 or an inconsistent value: overflow, control characters, blank versus null,
      length before trimming, case-sensitive keys;
    - queries that load whole aggregates or owned collections for a few columns, or make avoidable round trips.
-4. Post your findings as one comment on the ticket, following tracker.md, starting with the line
+4. Post your findings as one comment on the ticket with `comment`, starting with the line
    `Quality review findings`, then a numbered list: the file and line, what is wrong, and why it matters.
    With nothing to report, post `Quality review findings: none`.
 

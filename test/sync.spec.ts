@@ -1,35 +1,24 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { sql } from '../pipeline-agents/src/store.ts'
-import { sync } from '../src/sync.ts'
-import { freshDb, run } from './helpers.ts'
+import type { ToolCallArgs, ToolCallResult } from 'claude-code'
+import { TRACKER_TOOL } from '../pipeline-agents/src/agents.ts'
+import { sync, trackerTool } from '../src/sync.ts'
+import { fakeTracker, freshDb, run } from './helpers.ts'
 
-/** A tracker.md whose three sync commands print the given JSON. */
-const tracker = (waiting: unknown[], done: unknown[], blockers: unknown[]) => `# Tracker
-## List the tickets waiting to be worked
-\`\`\`sh
-echo '${JSON.stringify(waiting)}'
-\`\`\`
-## List the tickets that are done
-\`\`\`sh
-echo '${JSON.stringify(done)}'
-\`\`\`
-## List the blockers
-\`\`\`sh
-echo '${JSON.stringify(blockers)}'
-\`\`\`
-`
+/** A tracker tool whose three sync ops return the given results. */
+const tracker = (waiting: unknown, done: unknown, blockers: unknown) => fakeTracker({ waiting: () => waiting, done: () => done, blockers: () => blockers })
 
 test('waiting tickets are added as new and existing rows keep their status', async () => {
   // given
   // ... one ticket already ready under an old title, and the tracker listing it and a new one
   const db = await freshDb()
   await sql(run, db, `insert into tickets (ticket_id, title, status, model) values ('1', 'old', 'ready', 'opus')`)
-  const md = tracker([{ id: 1, title: 'renamed', url: null, body: null }, { id: 2, title: 'two', url: 'https://t/2', body: 'the body' }], [], [])
+  const t = tracker([{ id: 1, title: 'renamed', url: null, body: null }, { id: 2, title: 'two', url: 'https://t/2', body: 'the body' }], [], [])
 
   // when
   // ... sync runs
-  await sync(run, db, md)
+  await sync(t, run, db)
 
   // then
   // ... the existing row has the new title and the same status, the new one is new
@@ -43,7 +32,7 @@ test('a waiting ticket with an unfinished blocker is not pulled in', async () =>
   // given
   // ... two waiting tickets, one blocked by an open ticket and one by a done ticket
   const db = await freshDb()
-  const md = tracker(
+  const t = tracker(
     [{ id: 1, title: 'one', url: null, body: null }, { id: 2, title: 'two', url: null, body: null }],
     [],
     [{ id: 1, blocked_by: 9, blocker_done: false }, { id: 2, blocked_by: 8, blocker_done: true }],
@@ -51,7 +40,7 @@ test('a waiting ticket with an unfinished blocker is not pulled in', async () =>
 
   // when
   // ... sync runs
-  await sync(run, db, md)
+  await sync(t, run, db)
 
   // then
   // ... only the ticket whose blocker is done is in the table
@@ -64,11 +53,11 @@ test('a ticket that became blocked is removed while new or ready, and kept once 
   const db = await freshDb()
   await sql(run, db, `insert into tickets (ticket_id, title, status) values ('1', 'one', 'new'), ('2', 'two', 'ready'), ('3', 'three', 'in_progress')`)
   const waiting = [1, 2, 3].map(id => ({ id, title: `t${id}`, url: null, body: null }))
-  const md = tracker(waiting, [], [1, 2, 3].map(id => ({ id, blocked_by: 9, blocker_done: 0 })))
+  const t = tracker(waiting, [], [1, 2, 3].map(id => ({ id, blocked_by: 9, blocker_done: 0 })))
 
   // when
   // ... sync runs
-  await sync(run, db, md)
+  await sync(t, run, db)
 
   // then
   // ... only the in-progress ticket is left
@@ -80,11 +69,11 @@ test('tickets done in the tracker are marked done', async () => {
   // ... a ticket with its PR open that the tracker now has as done
   const db = await freshDb()
   await sql(run, db, `insert into tickets (ticket_id, title, status) values ('1', 'one', 'pr_open'), ('2', 'two', 'pr_open')`)
-  const md = tracker([], [{ id: 1 }], [])
+  const t = tracker([], [{ id: 1 }], [])
 
   // when
   // ... sync runs
-  await sync(run, db, md)
+  await sync(t, run, db)
 
   // then
   // ... it is done and the other is untouched
@@ -94,33 +83,24 @@ test('tickets done in the tracker are marked done', async () => {
   ])
 })
 
-test('a tracker.md without the blockers command is refused', async () => {
+test('a blockers result that is not a list of rows is refused', async () => {
   // given
-  // ... a tracker.md written before the blockers command was required
+  // ... a tracker whose blockers op returns one object instead of an array
   const db = await freshDb()
-  const md = tracker([], [], []).split('## List the blockers')[0] ?? ''
+  const t = tracker([], [], { id: 1, blocked_by: 2, blocker_done: false })
 
   // when
   // ... sync runs
-  const synced = sync(run, db, md)
+  const synced = sync(t, run, db)
 
   // then
-  // ... it fails naming the missing section
-  await assert.rejects(synced, /no command under "## List the blockers"/)
+  // ... it fails naming the op
+  await assert.rejects(synced, /tracker blockers did not return an array of objects/)
 })
-
-/** The tracker.md sections stacking needs, after the sync commands. */
-const stacking = `## Open a stacked PR
-Find the blocker PR's head branch, branch from it, open the PR on it.
-## Bring a stacked PR up to date
-\`\`\`sh
-true
-\`\`\`
-`
 
 /** Ticket 2 waiting, blocked by the tickets in `by`, none done. */
 const dependent = (by: number[]) =>
-  tracker([{ id: 2, title: 'two', url: null, body: null }], [], by.map(b => ({ id: 2, blocked_by: b, blocker_done: false }))) + stacking
+  tracker([{ id: 2, title: 'two', url: null, body: null }], [], by.map(b => ({ id: 2, blocked_by: b, blocker_done: false })))
 
 test('with stacking on, a ticket whose only unfinished blocker has its PR open is pulled in stacked on it', async () => {
   // given
@@ -130,7 +110,7 @@ test('with stacking on, a ticket whose only unfinished blocker has its PR open i
 
   // when
   // ... sync runs
-  await sync(run, db, dependent([1]), 2)
+  await sync(dependent([1]), run, db, 2)
 
   // then
   // ... ticket 2 is new, stacked on ticket 1
@@ -148,7 +128,7 @@ test('with stacking on, a ticket is held while its blocker is still in progress'
 
   // when
   // ... sync runs at stack depth 2
-  await sync(run, db, dependent([1]), 2)
+  await sync(dependent([1]), run, db, 2)
 
   // then
   // ... ticket 2 is not in the table
@@ -163,7 +143,7 @@ test('with stacking on, a ticket with two unfinished blockers is held', async ()
 
   // when
   // ... sync runs at stack depth 2
-  await sync(run, db, dependent([1, 3]), 2)
+  await sync(dependent([1, 3]), run, db, 2)
 
   // then
   // ... ticket 2 is not in the table
@@ -178,7 +158,7 @@ test('with stacking on, a ticket is held when its stack would pass the stack dep
 
   // when
   // ... sync runs
-  await sync(run, db, dependent([1]), 2)
+  await sync(dependent([1]), run, db, 2)
 
   // then
   // ... ticket 2 is not in the table
@@ -193,7 +173,7 @@ test('with stacking on, a ticket is held when another is already stacked on its 
 
   // when
   // ... sync runs at stack depth 3
-  await sync(run, db, dependent([1]), 3)
+  await sync(dependent([1]), run, db, 3)
 
   // then
   // ... ticket 2 is not in the table
@@ -208,7 +188,7 @@ test('a ticket done in the tracker frees the tickets stacked on it', async () =>
 
   // when
   // ... sync runs
-  await sync(run, db, tracker([], [{ id: 1 }], []))
+  await sync(tracker([], [{ id: 1 }], []), run, db)
 
   // then
   // ... ticket 1 is done and ticket 2 is stacked on nothing
@@ -216,4 +196,75 @@ test('a ticket done in the tracker frees the tickets stacked on it', async () =>
     { ticket_id: '1', status: 'done', stacked_on: null },
     { ticket_id: '2', status: 'in_progress', stacked_on: null },
   ])
+})
+
+/** `$.tool` listing `names` and answering every call with `answer`; `calls` records each call's input. */
+const toolApi = (names: string[], answer: ToolCallResult) => {
+  const calls: ToolCallArgs[] = []
+  return {
+    calls,
+    list: async () => names.map(name => ({ name })),
+    call: async (input: ToolCallArgs) => {
+      calls.push(input)
+      return answer
+    },
+  }
+}
+
+test('with no tracker tool loaded there is no tracker', async () => {
+  // given
+  // ... a session whose tools do not include the tracker tool
+  const tool = toolApi(['Read'], { result: [] })
+
+  // when
+  // ... the loop looks up its tracker
+  const tracker = await trackerTool(tool)
+
+  // then
+  // ... it has none
+  assert.equal(tracker, null)
+})
+
+test('a tracker op calls the tracker tool with op and arguments and resolves the tool result', async () => {
+  // given
+  // ... the tracker tool loaded and answering a list of rows
+  const tool = toolApi(['Read', TRACKER_TOOL], { result: [{ id: '1' }], text: 'shown to the model' })
+
+  // when
+  // ... the loop calls one op with arguments
+  const tracker = await trackerTool(tool)
+  const out = await tracker?.('pr_view', { url: 'https://git/pr/1' })
+
+  // then
+  // ... the call carries the tool name, the arguments and op, and resolves the result itself
+  assert.deepEqual(tool.calls, [{ tool: TRACKER_TOOL, url: 'https://git/pr/1', op: 'pr_view' }])
+  assert.deepEqual(out, [{ id: '1' }])
+})
+
+test('a denied tracker call rejects with the reason', async () => {
+  // given
+  // ... the tracker tool loaded and a hook denying the call
+  const tracker = await trackerTool(toolApi([TRACKER_TOOL], { deny: 'not allowed' }))
+
+  // when
+  // ... the loop calls an op
+  const call = tracker?.('waiting')
+
+  // then
+  // ... it rejects with the deny's reason
+  await assert.rejects(call ?? Promise.resolve(), { message: 'not allowed' })
+})
+
+test('a tracker call answered with an error rejects with its text', async () => {
+  // given
+  // ... the tracker tool loaded and answering an error
+  const tracker = await trackerTool(toolApi([TRACKER_TOOL], { isError: true, result: null, text: 'gh timed out' }))
+
+  // when
+  // ... the loop calls an op
+  const call = tracker?.('done')
+
+  // then
+  // ... it rejects naming the op and the error
+  await assert.rejects(call ?? Promise.resolve(), { message: 'tracker done failed: gh timed out' })
 })
