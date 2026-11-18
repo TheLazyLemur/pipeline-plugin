@@ -57,16 +57,18 @@ Things SPEC.md does not settle. Everything else the build decided is described i
     subshell's `cd` is taken to persist. Only the main checkout is protected: a worktree of another ticket or any
     other folder on disk is not.
 15. **Stacked PRs on GitHub: `gh stack link` has no `--auto`, and `--open` marks every PR in the stack ready**, the
-    blocker's included. So `/tracker-setup` suggests `gh pr create --base <blocker head branch>` (`--draft` per the
-    draft rule), then `gh stack link <blocker PR> <new PR>` without `--open`. The suggested up-to-date script runs
-    `gh pr update-branch` only on `mergeStateStatus` `BEHIND` (and fails on `DIRTY`); unchecked whether GitHub
+    blocker's included. So `/tracker-setup` suggests a `pr_create` with `base` that runs
+    `gh pr create --base <blocker head branch>` (`--draft` per the draft rule), then `gh stack link <blocker PR> <new PR>`
+    without `--open`. The suggested `pr_restack` runs `gh pr update-branch` only on `mergeStateStatus` `BEHIND` (and
+    fails on `DIRTY`); unchecked whether GitHub
     reports `BEHIND` for a base that is an unprotected feature branch. If it reports `CLEAN`, the script never
     updates a stacked PR; comparing `behind_by` through `gh api repos/{owner}/{repo}/compare/<base>...<head>` would
     not depend on it. Switch?
 16. **A closed PR leaves a stacked ticket already in needs_human with its own question**, rather than overwriting it
-    with the closed-PR one. An up-to-date command that times out (`$.process.run` rejects) is logged as "tracker
-    unreachable" like any tracker command, not sent to needs_human: a timeout is more likely the host than a
-    conflict.
+    with the closed-PR one. Any `pr_restack` failure sends its ticket to needs_human, a timeout inside the mod
+    included: the tracker tool answers both as an error, so the loop cannot tell a timeout from a conflict. An
+    unreachable host still reads as "tracker unreachable", since the merge check calls `pr_merged` on the same PR
+    earlier in the pass and fails first.
 17. **Decided: an implementer cuts its branch from `origin/<default>`, which the loop reads from `origin/HEAD`** and
     states on a `Branch from:` line. A branch cut from the main checkout's HEAD started wherever the user's local
     `main` was: unpulled after a merge, it gave a PR that conflicted with main. The loop reads the ref locally

@@ -1,5 +1,5 @@
 import type { ModelUsage, Register } from 'claude-code'
-import { LOOP_PLUGIN, agentOf } from '../src/agents.ts'
+import { LOOP_PLUGIN, TRACKER_TOOL, agentOf } from '../src/agents.ts'
 import { GUARDED, worktreeRefusal } from '../src/guards.ts'
 import { REPORT_TOOL, dbRefusal, onReport, stop } from '../src/result.ts'
 import { type Verdict, decide, markTold, nudgeText, openRun, readRun, recordRequest, softStopText } from '../src/limits.ts'
@@ -161,10 +161,14 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // the loop's agents run unattended: a call that would prompt is allowed; deny rules and an org ceiling still stand
+  // the loop's agents run unattended: a call that would prompt is allowed; deny rules and an org ceiling still stand.
+  // So is the loop's own call of the project's tracker tool, made from its timer on the main loop with no agent
   on('tool.check', async ($, e, next) => {
     const verdict = await next(e)
-    if (verdict.decision !== 'ask' || e.agentId === undefined || (e.ceiling !== undefined && e.ceiling !== 'allow')) return verdict
+    if (verdict.decision !== 'ask' || (e.ceiling !== undefined && e.ceiling !== 'allow')) return verdict
+    if (e.agentId === undefined) {
+      return e.tool === TRACKER_TOOL && next.origin.plugin === LOOP_PLUGIN ? { decision: 'allow', reason: `${$.plugin.name} allows the pipeline loop's tracker calls` } : verdict
+    }
     const agent = (await $.agent.list()).find(a => a.id === e.agentId)
     return agentOf(agent, LOOP_PLUGIN) !== null ? { decision: 'allow', reason: `${$.plugin.name} allows the pipeline agents' calls` } : verdict
   })

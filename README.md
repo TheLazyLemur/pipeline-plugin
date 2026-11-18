@@ -32,7 +32,7 @@ Then, in your project:
 
 | command | what it does |
 |---|---|
-| `/pipeline:tracker-setup` | Connects the pipeline to your tracker and writes `.claude/pipeline/tracker.md`. Run once per project, and again to switch tracker. |
+| `/pipeline:tracker-setup` | Connects the pipeline to your tracker and PR host, through MCP servers or CLIs, and writes the project mod `.claude/skills/pipeline-tracker/`, whose one `tracker` tool the loop, agents, skills and CLI use. Run once per project, and again to switch tracker or PR host, or to port a project set up with `tracker.md`. |
 | `/pipeline:pipeline-status` | Shows where every ticket stands and lets you answer the ones in `needs_human`. |
 | `/pipeline:learn` | Works through the review of the pipeline's PRs with you (human comments, and the verifier's findings with the fixer's outcome) and changes the file that would have prevented each problem. |
 
@@ -50,8 +50,9 @@ Node 25, which runs TypeScript directly:
 | `node <plugin>/bin/pipeline.ts tracker link-blocker <id> <blocker>` | nothing | nothing; records that `<id>` is blocked by `<blocker>` |
 | `node <plugin>/bin/pipeline.ts triage-preview` | `{"title", "body"}` | `{"status": "ready" or "needs_human", "ready", "question", "difficulty", "confidence", "model", "reason"}` |
 
-`tracker create` and `tracker link-blocker` run tracker.md's `## Create a ticket` and `## Link a blocker`; a
-tracker.md written before them needs `/pipeline:tracker-setup` again, which adds only what is missing.
+`tracker create` and `tracker link-blocker` run the tracker mod's `create` and `link_blocker` ops through its
+`/pipeline-tracker` command, in a headless `claude -p` from the project root; without the mod they say to run
+`/pipeline:tracker-setup`.
 `triage-preview` judges a draft with the same prompts, guides and confidence threshold as the loop's triage, through
 `claude -p` on Haiku with your CLAUDE.md, settings, hooks and plugins left out. Output is one line of JSON; any
 failure exits 1 with one line on stderr.
@@ -67,7 +68,10 @@ restart; without it, nothing is sent.
 flowchart TD
     start([Timer fires]) --> setup{"Is .claude/pipeline set up?"}
     setup -- no --> stop(["Log: run /tracker-setup"])
-    setup -- yes --> merged[Each pr_open ticket whose PR merged: mark done in the tracker and the table]
+    setup -- yes --> tool{"Is the pipeline-tracker tool loaded?"}
+    tool -- no --> notool["Log: no pipeline tracker tool here; run /tracker-setup"]
+    notool --> triage
+    tool -- yes --> merged[Each pr_open ticket whose PR merged: mark done in the tracker and the table]
     merged --> restack[Stack depth above 1: bring each pr_open stacked PR up to date, bottom first]
     restack --> sync[Sync: pull new and changed tickets from the tracker]
     sync --> held{Blocker not done?}
@@ -108,8 +112,8 @@ whose owning session has stopped: several sessions may load the pipeline on one
 project, and each moves on only the tickets it claimed. Agent review is one round only; the `Draft: ` prefix comes off the PR title when it is done.
 A ticket blocked by another in the tracker is held until its blocker is done; marking merged PRs done before
 sync releases it in the same pass, so it is built on its blocker's merged code. `/pipeline:pipeline-status`
-lists held tickets and what holds each. With `Stack depth: <n>` above 1 in routing.md and the two stacked PR sections
-in tracker.md (`/pipeline:tracker-setup` asks), a ticket whose only unfinished blocker has its PR open for you starts
+lists held tickets and what holds each. With `Stack depth: <n>` above 1 in routing.md and a PR host whose tracker mod
+opens stacked PRs and brings them up to date (`/pipeline:tracker-setup` asks), a ticket whose only unfinished blocker has its PR open for you starts
 early instead, on a PR stacked on its blocker's, up to n unmerged PRs per stack; each pass brings open stacked PRs up
 to date with the PR under them, and a PR closed without merging sends its ticket and those stacked on it to you
 (`docs/specs/stacked-prs.md`).

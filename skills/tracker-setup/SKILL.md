@@ -1,176 +1,160 @@
 ---
 name: tracker-setup
-description: Connect the pipeline to this project's ticket tracker. Finds the tracker tooling, reads the board's statuses and writes .claude/pipeline/tracker.md. Use when setting up the pipeline in a project or switching tracker.
+description: Connect the pipeline to this project's ticket tracker and PR host. Finds the MCP servers or CLIs that reach them, agrees the status mapping and writes the project mod .claude/skills/pipeline-tracker/, whose one tracker tool the loop, agents, skills and CLI use. Use when setting up the pipeline in a project, switching tracker or PR host, or porting a tracker.md or tracker.sh.
 ---
 
 # Tracker setup
 
-A conversation with the user. The result is `.claude/pipeline/tracker.md`: the commands the pipeline's mod runs to
-sync, the two commands `bin/pipeline.ts` runs to add work, and the instructions its agents follow to talk to the
-tracker. No adapter code in the plugin.
+A conversation with the user. The result is a small project mod, `pipeline-tracker`, in
+`.claude/skills/pipeline-tracker/`, where Claude Code loads it automatically and reloads it on change. It registers
+one tool, `tracker` (`mcp__pipeline-tracker__tracker`), covering both the tracker and the PR host, and one command,
+`/pipeline-tracker <op> <json args>`, that runs the same ops outside a session. The loop, every pipeline agent,
+`/learn`, `/pipeline-status` and the CLI (`bin/pipeline.ts`) reach the tracker and the PR host through it alone. The
+mod is the project's code: the pipeline plugin ships no adapter.
 
-**Add what's missing.** When `.claude/pipeline/tracker.md` already exists and the user is not switching tracker,
-read it and list the sections below that it lacks (a tracker.md from before `## Create a ticket` and
-`## Link a blocker` lacks those two). Write only those, following step 3 for the tracker and the waiting status
-that tracker.md already names, add any missing script subcommands and their contract tests, and leave every other
-section, the script's other subcommands and the guides unchanged. Then stop: skip the rest of this skill.
+## The contract
 
-1. **Find the tracker.** Ask which tracker and board or project this repo uses if it is not obvious. Look for what
-   can reach it: a connected MCP server, `gh` (run `gh auth status`), `acli` or a Jira API token in an env var, or
-   anything else the user names. Try a read-only call to prove it works.
-2. **Read the board's statuses** and agree with the user on the mapping:
-   - which tracker statuses mean a ticket is waiting to be worked (sync pulls these in as `new`),
-   - which status to move a ticket to when the implementer starts, when its PR is open, and which mean done.
-3. **Write `.claude/pipeline/tracker.md`.** The pipeline's mod runs five commands itself, and its CLI two more.
-   Each goes in the first fenced code block under its own heading, spelled exactly as below, and is run with
-   `sh -c` from the project root. A tracker.md missing any of the mod's five stops every loop pass from syncing,
-   logging "tracker unreachable" with "run /tracker-setup".
+One tool, `tracker`, input `{op, ...args}`. Every op is bounded at 30 seconds inside the mod. A failing op answers
+`{deny: "<reason>"}`, naming the reason (not connected, auth expired, timed out after 30 s, the host's error); no
+retries inside the mod: the loop logs "tracker unreachable: <reason>" and its next pass tries again. A success
+answers `{result}`, the value below as a JSON value (never JSON text), ok as the string `"ok"`.
 
-   **Pick the shape.** When the tracker or the PR host is reached through an API (Jira, GitHub, Bitbucket, Linear),
-   write one script, `.claude/pipeline/tracker.sh`, with one subcommand per section below: `waiting`, `done`,
-   `blockers`, `merged`, `mark-done`, `create`, `link-blocker` (and `restack` with stacked PRs, step 5), plus `read`, `move`, `comment` and `link-pr` for the agents. Each section
-   of tracker.md is then one line calling the script, for example `.claude/pipeline/tracker.sh merged "$1"`.
-   Auth, pagination, JSON shaping and transitions live in tested code, and the agents call one known command
-   instead of composing API requests. If the project already has helpers for that tracker (a Jira client, a
-   `gh` wrapper, an API library), call them from the script instead of writing new requests. For a local
-   tracker such as a SQLite file, inline commands in tracker.md are fine and no script is needed.
+| `op` | Input | Returns |
+|---|---|---|
+| `waiting` | none | `[{id, title, url, body}]` |
+| `done` | none | `[{id}]` |
+| `blockers` | none | `[{id, blocked_by, blocker_done}]` |
+| `mark_done` | `id` | ok |
+| `create` | `title`, `body` | `{id, url}` |
+| `link_blocker` | `id`, `blocked_by` | ok |
+| `read` | `id` | `{id, title, url, body, comments: [{author, at, text}]}` |
+| `move` | `id`, `status` (`in_progress` / `in_review` / `done`) | ok |
+| `comment` | `id`, `text` | ok |
+| `link_pr` | `id`, `url` | ok |
+| `pr_create` | `branch`, `title`, `body`, `draft`, `base?` | `{url}` |
+| `pr_view` | `url` | `{title, branch, head, draft, merged}` |
+| `pr_merged` | `url` | `{merged: true}`, `{merged: false}` (open) or `{merged: false, closed: true}` |
+| `pr_diff` | `url` | the diff, as text |
+| `pr_comment` | `url`, `text` | ok |
+| `pr_comments` | `url` | `[{author, at, text, path?, line?}]`, general and inline together |
+| `pr_edit` | `url`, `title?`, `body?` | ok |
+| `pr_ready` | `url` | ok |
+| `pr_restack` | `url` | ok |
 
-   A script needs contract tests, in the project's own test setup, that run each subcommand and check the output
-   shape the mod relies on, without a live loop: the JSON fields of `waiting`, `done` and `blockers`, that every
-   `id` that `waiting` and `blockers` print, and every `blocked_by`, matches the id rule below,
-   `{"merged": true|false}` or `{"merged": false, "closed": true}` from `merged`, and `mark-done` succeeding on an already-done ticket and failing on
-   a bad id; that `create` reads `{"title", "body"}` from stdin, sends the title, the converted body and the
-   waiting status or label, and prints `{"id", "url"}` with an `id` that matches the id rule, and that
-   `link-blocker` sends `$1` as the blocked ticket and `$2` as its blocker. Stub or record the API responses; the
-   tests must not need to change a real ticket. They must pass before tracker.md is saved.
+- `id` and `blocked_by` are the tracker's ids, as strings or integers; an `id` given to an op is a string. Each must
+  be one path segment, because the pipeline names every agent's worktree `<id>-<role>`: it matches
+  `^[A-Za-z0-9_.@+-]+$` and is neither `.` nor `..`. So `42` or `APS-756`, never `owner/repo#42` or a URL: return
+  the tracker's short id, not a reference to it. The rule is `TICKET` and `bad()` in `pipeline-agents/src/guards.ts`;
+  if those change, change it here too. `url` is null when a ticket has none.
+- `waiting`: only work items one PR can finish, epics and other parent or container types left out. `body` is the
+  description followed by the acceptance criteria (triage judges the ticket from it), null when there is none.
+- `done`: every ticket in a done status.
+- `blockers`: one row per link from a waiting ticket to a ticket it is blocked by or depends on, `blocker_done`
+  true when that ticket is in a done status (true or false; 1 or 0 is accepted). `[]` when the tracker has no links.
+- `mark_done`: moves the ticket to the done status, and succeeds when it is already done (some trackers close on
+  merge).
+- `create`: creates the ticket in a waiting status, so the next sync pulls it in; `body` is markdown. `id` is a
+  string that matches the id rule.
+- `link_blocker`: records that `id` is blocked by `blocked_by`, so `blockers` then returns
+  `{id, blocked_by, ...}` for it.
+- `move`: takes the pipeline's statuses and maps them to the board's, as the README records.
+- `read`, `waiting` and `pr_comments` return markdown or plain text, never a tracker's rich format, and `comment`
+  and `create` take markdown: on Jira, convert ADF to text on the way in and markdown to ADF on the way out.
+- `pr_create`: the branch is already pushed; the mod runs no git. `base` is the head branch of the PR to stack on;
+  without it the PR goes on the default branch. With `draft: true` it opens a host draft titled `Draft: <title>`;
+  on a host without drafts, the prefix alone marks it. `pr_ready` marks the PR ready on the host and strips the
+  `Draft: ` prefix, in one call. `branch` in `pr_view` is the PR's head branch, `head` its head commit's sha; `draft`
+  is true while either the host draft or the prefix stands.
+- `pr_restack`: brings the PR's branch up to date with its base on the host, succeeds when it is already up to
+  date, and fails on a conflict, naming it. It touches no local checkout (the loop runs it from the user's main
+  checkout) and never force-pushes.
 
-   The three sync commands each print one JSON array (or nothing, meaning none), with exactly these fields:
-   - `## List the tickets waiting to be worked` prints `[{"id", "title", "url", "body"}]`, `url` null when there is
-     none, `body` the description followed by the acceptance criteria (triage judges the ticket from it). Only work items one PR can finish: filter out epics and other parent or container types in the
-     command itself.
-   - `## List the tickets that are done` prints `[{"id"}]`, every ticket in a done status.
-   - `## List the blockers` prints `[{"id", "blocked_by", "blocker_done"}]`, one row per link from a waiting
-     ticket to a ticket it is blocked by or depends on, `blocker_done` true when that ticket is in a done
-     status. When the tracker has no such links, the command prints `[]`.
+## Steps
 
-   `id` and `blocked_by` are the tracker's ids, as strings or integers. Each must be one path segment, because the
-   pipeline names every agent's worktree `<id>-<role>`: it matches `^[A-Za-z0-9_.@+-]+$` and is neither `.` nor
-   `..`. So `42` or `APS-756`, never `owner/repo#42` or a URL: print the tracker's short id, not a reference to it.
-   The rule is `TICKET` and `bad()` in `pipeline-agents/src/guards.ts`; if those change, change it here too.
+1. **Find what reaches the tracker and the PR host**, often two systems (Jira and Bitbucket, Linear and GitHub). Ask
+   which tracker and board, and which PR host, if it is not obvious. Look for a connected MCP server (`/mcp`), a CLI
+   (`gh auth status`, `acli`), an HTTP API with a token in an env var, or anything the user names. Prove each with a
+   read-only call. Prefer what the project already uses, and its own helpers for that tracker (a Jira client, a
+   `gh` wrapper) over new requests. Ask whether the user wants stacked PRs (a PR whose base is another PR's branch,
+   retargeted when that one merges) and whether the PR host supports them: they need `pr_create`'s `base` and
+   `pr_restack`. Without them, both answer `{deny}` naming that, and step 7 leaves stacking off.
+2. **Read the board's statuses** and agree the mapping with the user: which statuses mean waiting to be worked
+   (`waiting`, and the status `create` puts a new ticket in), which status `move` uses for `in_progress`,
+   `in_review` and `done`, and which statuses mean done (`done`, `blocker_done`).
+3. **Port an existing setup.** If `.claude/pipeline/tracker.md` or `.claude/pipeline/tracker.sh` exists, translate
+   its commands into the mod's ops: they are commands the user already proved. Its sections map to ops by name
+   (`## List the tickets waiting to be worked` is `waiting`, `## Check whether a PR is merged` is `pr_merged`,
+   `## Bring a stacked PR up to date` is `pr_restack`, and so on); its read, move, comment and link-PR
+   instructions become `read`, `move`, `comment` and `link_pr`. A script the mod still runs moves into the mod's
+   folder, with its contract tests. Delete both files once step 5 passes; nothing reads them any more.
+4. **Write the mod** in `.claude/skills/pipeline-tracker/`:
+   - `.claude-plugin/plugin.json`:
+     `{ "name": "pipeline-tracker", "version": "0.1.0", "description": "The pipeline's tracker tool for <tracker> and <PR host>" }`
+   - `hooks/hooks.json`: `{ "modules": ["./register.ts"] }`
+   - `hooks/register.ts`. In `session.start`, before `next`, register the tool with `$.tool.register`, with
+     `isDeferred: false` so it is never behind tool search and an input schema naming `op` (the nineteen values) and
+     the arguments above, and register the command with
+     `$.command.register({ name: 'pipeline-tracker', description: '…', argumentHint: '<op> <json args>' })`.
+     Write one function per op, built on `$.mcp.call(server, tool, args)` for an MCP server, `$.http.fetch` for an
+     API, or `$.process.run(argv)` for a CLI, the argv a list so no value is ever read as shell text. Race each op
+     against `$.clock.sleep(30_000)`, and fail on the timeout, on a thrown error, on an MCP result with `isError`,
+     on a non-2xx response or a non-zero exit, and on an unknown op. Shape every success to the contract. Then:
+     - one `tool.call` hook on `{ tool: 'mcp__pipeline-tracker__tracker' }` answers `{result}`, or `{deny}` naming
+       the reason;
+     - one `command.run` hook on `{ command: 'pipeline-tracker' }` takes the op as the first word of `e.args` and
+       the rest as its JSON arguments (none is `{}`), and answers `{text: JSON.stringify(result), exitCode: 0}`, or
+       `{text: reason, exitCode: 1}`, without calling `next`, so no model turn runs.
+   - `README.md`: the status mapping, and for each op what it calls (server and tool, endpoint, or command), so the
+     user can read and adjust what it does.
+   - `test/*.test.ts`: the contract tests, one per op, writes included. Each answers the mod's `mcp.call`,
+     `http.fetch` and `process.run` requests from saved responses (`on('mcp.call', …)` and the like, beneath the
+     mod), checks the server, tool and arguments (or URL and body, or argv) the op sent, and the shape it returned.
+     Add a test that an op failing beneath answers `{deny}` naming the reason, one that an unknown op is denied,
+     and one that `/pipeline-tracker` answers an op's result with exit code 0 and a failure with 1. Nothing in them
+     may reach a real ticket or PR.
 
-   Each loop pass, before syncing, the mod runs two more for every ticket whose PR is open, so a merged blocker
-   releases its dependents in the same pass. Each gets one value as `$1`, passed as an argument and never
-   spliced into the command: always quote it as `"$1"`, and never paste it into a query string unchecked.
-   - `## Check whether a PR is merged` gets the PR URL as `$1` and prints `{"merged": true}`, `{"merged": false}`
-     while it is open, or `{"merged": false, "closed": true}` when it was closed without merging, which sends its
-     ticket to you; anything else stops the pass from syncing. On GitHub:
-     `gh pr view "$1" --json state --jq 'if .state == "CLOSED" then {merged: false, closed: true} else {merged: (.state == "MERGED")} end'`.
-     Use the PR host's CLI or API. A command that never prints `closed` still works: a closed PR then reads as open.
-   - `## Mark a ticket done` gets the tracker ticket id as `$1` and moves it to the done status, exiting
-     non-zero on failure. It must succeed when the ticket is already done (some trackers close on merge).
+   Credentials never go in the mod: it relies on the MCP server's or CLI's own login, or reads a token from an env
+   var it names (`$.env.get`).
+5. **Check it.** Run each read op live once, through the tool once the mod has loaded (when the tool is not listed
+   yet, ask the user to restart the session and carry on from this step): `waiting`, `done`, `blockers`, `read` on a
+   ticket the user names, `pr_view` on an open PR, and `pr_merged` on one merged and one open PR, and one closed
+   without merging if there is one. Check that every `id` and `blocked_by` in them follows the id rule, while at
+   least one ticket waits and one link exists. Run `claude -p "/pipeline-tracker waiting"` from the project root
+   once too, which proves the CLI's way in. Never run a write op against a real ticket or PR while checking: writes
+   are first exercised live on the first real ticket. Keep the live responses as the contract tests' saved
+   responses. Then run `claude plugin validate .claude/skills/pipeline-tracker` and
+   `claude plugin test .claude/skills/pipeline-tracker`. Nothing is saved until both the live check and the tests
+   pass: fix the mod and check again.
+6. **Ask the user** whether to commit the mod (the team loads it too), add `.claude/skills/pipeline-tracker/` to
+   the project's `.gitignore`, or keep it to this clone through `.git/info/exclude`. Do what they choose.
+7. **Copy the defaults** `readiness.md`, `rubric.md` and `routing.md` from this skill's `defaults/` folder into
+   `.claude/pipeline/`, skipping any that already exist. Show them to the user and offer to adjust them. With
+   stacked PRs on (step 1), set routing.md's `Stack depth:` to the most unmerged PRs a stack may hold, counting its
+   bottom one (2 lets one ticket build on one open PR). Add `.claude/pipeline/pipeline.db` to the project's
+   `.gitignore`.
 
-   The loop never runs the next two: `node <plugin>/bin/pipeline.ts tracker create` and `tracker link-blocker`
-   do, so work can be added without an agent. A tracker.md without them still syncs; only the CLI fails, saying to
-   run /tracker-setup.
-   - `## Create a ticket` reads JSON `{"title": "...", "body": "..."}` on stdin, `body` markdown, creates the
-     ticket in a waiting status, so the next sync pulls it in, and prints `{"id": "...", "url": "..."}`: `id` a
-     string that matches the id rule below, `url` null when there is none. Never splice the title or body into the
-     command text; parse them out of stdin with `jq` or in the script.
-   - `## Link a blocker` gets the ticket id as `$1` and the id of the ticket blocking it as `$2`, records the link so
-     that `## List the blockers` then prints `{"id": "$1", "blocked_by": "$2", ...}`, and exits 0.
+## Per host
 
-   Per tracker:
-   - **GitHub.** Create with the waiting label from step 2 (`todo` here), the body on stdin:
-
-     ```sh
-     d=$(cat) && url=$(printf '%s' "$d" | jq -r .body | gh issue create --title "$(printf '%s' "$d" | jq -r .title)" --body-file - --label todo) && jq -n --arg url "$url" '{id: ($url | split("/") | last), url: $url}'
-     ```
-
-     When waiting is a Projects column rather than a label, also add the issue to the project and set that column.
-     Link through the issue dependencies API, which takes the blocking issue's numeric `.id`, not its number:
-     `gh api -X POST repos/{owner}/{repo}/issues/"$1"/dependencies/blocked_by -F issue_id="$(gh api repos/{owner}/{repo}/issues/"$2" --jq .id)"`.
-   - **Jira**, in the script. Ask for the project key, the issue type, and the waiting status a new ticket must
-     start in. Read the create metadata (`GET /rest/api/3/issue/createmeta/{projectKey}/issuetypes/{issueTypeId}`)
-     for fields that are required and have no default, agree a fixed value for each with the user, and put them in
-     the script. `create` converts the markdown body to ADF (headings, paragraphs, lists, code blocks, links, with
-     the project's helper or a library if it has one), `POST /rest/api/3/issue` with `summary` and `description`,
-     transitions the new issue to the waiting status when the workflow does not start there, and prints
-     `{"id": "<key>", "url": "https://<site>/browse/<key>"}`. `link-blocker` posts `/rest/api/3/issueLink` with type
-     `Blocks`, `inwardIssue` `$1` (is blocked by) and `outwardIssue` `$2` (blocks), and its contract test checks
-     that `blockers` reads such a link back as `$1` blocked by `$2`.
-   - **A local SQLite tracker**: an insert in the waiting status. `readfile('/dev/stdin')` fails on a pipe, so go
-     through a temp file:
-
-     ```sh
-     f=$(mktemp) && cat > "$f" && sqlite3 tracker.db "insert into tickets (title, body, status) select json_extract(d, '\$.title'), json_extract(d, '\$.body'), 'todo' from (select cast(readfile('$f') as text) d) returning json_object('id', cast(id as text), 'url', null)"; s=$?; rm -f "$f"; exit $s
-     ```
-
-     and an insert into its links table for `link-blocker`, after checking `$1` and `$2` against the id rule,
-     since the `sqlite3` shell cannot bind them as parameters.
-
-   Check these two by shape only and never run them, so nothing is posted to a shared board: each heading is
-   spelled exactly, its first fenced block is the command, `create` reads stdin (in the block or in the script
-   subcommand it calls) and `link-blocker` passes `"$1"` and `"$2"`. The script's contract tests cover their
-   behaviour; the user's first real ticket is the live test.
-
-   Run each of the mod's commands and check its output before saving. Pipe the output of `waiting` through
-   `jq -s -e 'def ok: (type == "string" or type == "number") and (tostring | test("^[A-Za-z0-9_.@+-]+$") and . != "." and . != ".."); .[0] | length > 0 and all(.[]; .id | ok)'`
-   while at least one ticket is waiting, and, if the tracker has links, the output of `blockers` through
-   `jq -s -e 'def ok: (type == "string" or type == "number") and (tostring | test("^[A-Za-z0-9_.@+-]+$") and . != "." and . != ".."); .[0] | length > 0 and all(.[]; (.id | ok) and (.blocked_by | ok))'`
-   while one link exists. Each exits non-zero when an id or `blocked_by` is missing, null or breaks the rule, and
-   on empty output, which proves nothing: fix the command and do not save tracker.md until both pass. Check the
-   merge command on one merged and one open PR, and one closed without merging if there is one, and mark-done only with the user's go-ahead, on a ticket they
-   name. Then add exact, copy-pasteable commands or tool calls, which the agents follow, for:
-   - reading one ticket in full (description, acceptance criteria, comments),
-   - moving a ticket's status,
-   - adding a comment to a ticket,
-   - linking a PR to a ticket,
-   - and the status mapping from step 2.
-
-   What reading a ticket prints, its comments included, and each `body` that `waiting` prints, is markdown or plain
-   text, never a tracker's rich format, so a UI only ever renders markdown. On Jira, `read` and `waiting` convert
-   ADF to text, and `comment` takes markdown and converts it to ADF.
-
-   Credentials never go in tracker.md or the script: name the env var or the tool's own login instead.
-4. **Copy the defaults** `readiness.md`, `rubric.md` and `routing.md` from this skill's `defaults/` folder into
-   `.claude/pipeline/`, skipping any that already exist. Show them to the user and offer to adjust them.
-5. **Stacked PRs (optional).** By default a ticket blocked by another waits until its blocker's PR merges. Ask
-   whether the PR host supports stacked PRs (a PR whose base is another PR's branch, retargeted when that one
-   merges) and whether the user wants them. If not, leave routing.md's `Stack depth: 1` and skip this step. If yes,
-   add two sections to tracker.md; a `Stack depth:` above 1 without both stops every pass from syncing, with
-   "run /tracker-setup":
-   - `## Open a stacked PR`: instructions the implementer follows, like the read and link-pr ones, not run by the
-     mod: how to find a PR's head branch, and how to open a PR stacked on a given PR (its base that PR's head
-     branch), as a draft or not as its prompt says.
-   - `## Bring a stacked PR up to date`: a command the mod runs each pass for every stacked ticket whose PR is open,
-     bottom of the stack first, with the PR URL as `$1` like the merge check. It brings the PR's branch up to date
-     with its base on the host, succeeds when it is already up to date, and exits non-zero, with the reason on
-     stderr, on a conflict or any other failure: the ticket then comes to you. It must not touch any local checkout
-     (the mod runs it in the user's main checkout), so it is a server-side update, and it never force-pushes.
-
-   On GitHub, native stacks use the `github/gh-stack` gh extension
-   (https://docs.github.com/en/pull-requests/reference/stacked-prs-cli-commands). Check it with
-   `gh extension list`; install it (`gh extension install github/gh-stack`) only with the user's go-ahead. Then:
-   - Open a stacked PR: the head branch is `gh pr view <blocker PR> --json headRefName --jq .headRefName`. Push
-     the branch, open the PR on that branch with `gh pr create --base <head branch>` (`--draft` when the prompt
-     says draft), then join it to the blocker's stack with `gh stack link <blocker PR URL> <new PR URL>`, which
-     makes the stack when there is none, extends the blocker's stack otherwise, and fixes a base that does not
-     match. `gh stack link` has no `--auto`, and its `--open` marks every PR in the stack ready for review, so
-     leave it out: the draft rule is the `gh pr create` flag.
-   - Bring a stacked PR up to date, as a `restack` subcommand of the script (`gh pr update-branch` merges the base
-     in and fails when there is nothing to merge, so it only runs when the PR is behind):
-
-     ```sh
-     state=$(gh pr view "$1" --json mergeStateStatus --jq .mergeStateStatus) || exit 1
-     case "$state" in
-       BEHIND) gh pr update-branch "$1" ;;
-       DIRTY) echo "$1 conflicts with its base" >&2; exit 1 ;;
-     esac
-     ```
-
-   Add contract tests for it to the script's tests: it succeeds on a PR already up to date and fails on a bad PR
-   URL. Then set routing.md's `Stack depth:` to the most unmerged PRs a stack may hold, counting its bottom one
-   (2 lets one ticket build on one open PR).
-6. Add `.claude/pipeline/pipeline.db` to the project's `.gitignore`.
-
-A new tracker means running this skill again; it overwrites tracker.md only.
+- **GitHub**, through `gh`: `pr_create` is `gh pr create --head <branch> --title … --body-file - [--base <base>]
+  [--draft]`; `pr_view` reads `gh pr view <url> --json title,headRefName,headRefOid,isDraft,state`; `pr_merged` is
+  `gh pr view <url> --json state` (`CLOSED` is `{merged: false, closed: true}`); `pr_comments` joins
+  `gh pr view <url> --json comments,reviews` and `gh api repos/{owner}/{repo}/pulls/<n>/comments`; `pr_ready` is
+  `gh pr ready <url>`, then `gh pr edit <url> --title <title without the prefix>`. For issues as tickets, `create`
+  is `gh issue create` with the waiting label, and `link_blocker` posts the issue dependencies API, which takes the
+  blocking issue's numeric `.id`, not its number:
+  `gh api -X POST repos/{owner}/{repo}/issues/<id>/dependencies/blocked_by -F issue_id=<the blocker's .id>`.
+  Stacked PRs use the `github/gh-stack` extension (https://docs.github.com/en/pull-requests/reference/stacked-prs-cli-commands);
+  check it with `gh extension list` and install it only with the user's go-ahead. With `base`, `pr_create` then
+  joins the new PR to the base PR's stack with `gh stack link <base PR> <new PR>`, without `--open`, which marks
+  every PR in the stack ready. `pr_restack` reads `gh pr view <url> --json mergeStateStatus`: on `BEHIND` it runs
+  `gh pr update-branch <url>` (which fails when there is nothing to merge), on `DIRTY` it fails naming the
+  conflict, otherwise it is up to date.
+- **Jira.** Ask for the project key, the issue type, and the waiting status a new ticket must start in. Read the
+  create metadata (`GET /rest/api/3/issue/createmeta/{projectKey}/issuetypes/{issueTypeId}`) for fields that are
+  required and have no default, agree a fixed value for each with the user, and put them in the mod. `create`
+  posts `/rest/api/3/issue` with `summary` and the body as ADF, transitions the new issue to the waiting status
+  when the workflow does not start there, and returns `{id: "<key>", url: "https://<site>/browse/<key>"}`.
+  `link_blocker` posts `/rest/api/3/issueLink` with type `Blocks`, `inwardIssue` the blocked ticket and
+  `outwardIssue` its blocker; its contract test checks that `blockers` reads such a link back the same way round.
+- **A local SQLite tracker**, through `sqlite3`: the `sqlite3` CLI cannot bind values, so check every id against
+  the id rule (an integer for an integer key) and double every `'` in a text value before it goes in a statement.

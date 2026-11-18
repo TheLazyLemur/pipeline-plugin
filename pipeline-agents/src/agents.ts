@@ -6,6 +6,9 @@ export const TAG = 'pipeline'
 /** The loop plugin's name: every pipeline agent is spawned by it, which is how pipeline-agents' hooks recognise them. */
 export const LOOP_PLUGIN = 'pipeline'
 
+/** The one tool of the project mod `pipeline-tracker` that /tracker-setup writes: the loop, its agents and the skills reach the tracker and PR host through it alone. */
+export const TRACKER_TOOL = 'mcp__pipeline-tracker__tracker'
+
 /** The review agents, `agents/<role>.md`, each described `pipeline <ticket_id> <role>`; the implementer is `pipeline <ticket_id>`. */
 export const ROLES = ['reviewer-spec', 'reviewer-quality', 'verifier', 'fixer'] as const
 export type Role = 'implementer' | (typeof ROLES)[number]

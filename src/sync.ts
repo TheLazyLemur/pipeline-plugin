@@ -1,64 +1,31 @@
 import { namesWorktree } from '../pipeline-agents/src/guards.ts'
 import { type Run, lit, sql } from '../pipeline-agents/src/store.ts'
 
-/** The headings in tracker.md whose first fenced block is a shell command printing a JSON array. */
-export const WAITING = 'List the tickets waiting to be worked'
-export const DONE = 'List the tickets that are done'
-export const BLOCKERS = 'List the blockers'
-/** The headings whose command takes one value as `$1`: a PR URL, then a tracker ticket id. */
-export const MERGED = 'Check whether a PR is merged'
-export const MARK_DONE = 'Mark a ticket done'
-/** With stacking on: instructions the agents follow, then a command taking a PR URL as `$1`. */
-export const STACK = 'Open a stacked PR'
-export const RESTACK = 'Bring a stacked PR up to date'
-/** The headings `bin/pipeline.ts` runs to add work, never the loop: create reads `{"title", "body"}` JSON on stdin; link takes a ticket id and its blocker's as `$1` and `$2`. */
-export const CREATE = 'Create a ticket'
-export const LINK_BLOCKER = 'Link a blocker'
+/** One call of the project's tracker tool (`TRACKER_TOOL`): `op` and its arguments in, the op's result out; rejects with the reason the op failed. */
+export type Tracker = (op: string, args?: Record<string, unknown>) => Promise<unknown>
 
 type Row = Record<string, unknown>
 
-const section = (tracker: string, heading: string) => tracker.split(/^## /m).find(s => s.startsWith(`${heading}\n`))?.slice(heading.length)
-
-const command = (tracker: string, heading: string) => {
-  const block = section(tracker, heading)?.match(/^```[^\n]*\n([\s\S]*?)^```/m)?.[1]
-  if (block === undefined || block.trim() === '') throw new Error(`tracker.md has no command under "## ${heading}"; run /tracker-setup`)
-  return block
-}
-
-/** Runs one tracker.md command; empty output is no rows (`sqlite3 -json` prints nothing for none). */
-const list = async (run: Run, tracker: string, heading: string): Promise<Row[]> => {
-  const r = await run(['sh', '-c', command(tracker, heading)])
-  if (r.exitCode !== 0) throw new Error(`"${heading}" exited ${r.exitCode}: ${r.stderr.trim()}`)
-  const rows: unknown = r.stdout.trim() === '' ? [] : JSON.parse(r.stdout)
-  if (!Array.isArray(rows) || !rows.every(row => typeof row === 'object' && row !== null)) throw new Error(`"${heading}" did not print a JSON array of objects`)
+/** Calls one op that returns a list of rows. */
+const list = async (tracker: Tracker, op: string): Promise<Row[]> => {
+  const rows = await tracker(op)
+  if (!Array.isArray(rows) || !rows.every(row => typeof row === 'object' && row !== null)) throw new Error(`tracker ${op} did not return an array of objects: ${String(JSON.stringify(rows)).slice(0, 200)}`)
   return rows
 }
 
-/** Runs one tracker.md command with `values` as its `$1`, `$2`…, so no value is ever read as shell text. */
-const call = async (run: Run, cmd: string, heading: string, ...values: string[]) => {
-  const r = await run(['sh', '-c', cmd, 'sh', ...values])
-  if (r.exitCode !== 0) throw new Error(`"${heading}" exited ${r.exitCode} for ${values.join(' ')}: ${r.stderr.trim()}`)
-  return r.stdout.trim()
-}
-
-/** Creates a ticket in the tracker's waiting status, passing `draft` as JSON on the command's stdin; resolves its id and url. */
-export const create = async (run: Run, tracker: string, draft: { title: string; body: string }): Promise<{ id: string; url: string | null }> => {
-  const r = await run(['sh', '-c', command(tracker, CREATE)], { stdin: JSON.stringify(draft) })
-  if (r.exitCode !== 0) throw new Error(`"${CREATE}" exited ${r.exitCode}: ${r.stderr.trim()}`)
-  let t: { id?: unknown; url?: unknown } | null = null
-  try {
-    t = JSON.parse(r.stdout)
-  } catch {}
+/** Creates a ticket in the tracker's waiting status; resolves its id and url. */
+export const create = async (tracker: Tracker, draft: { title: string; body: string }): Promise<{ id: string; url: string | null }> => {
+  const t = (await tracker('create', draft)) as { id?: unknown; url?: unknown } | null
   if (typeof t?.id !== 'string' || !namesWorktree(t.id) || (typeof t.url !== 'string' && t.url !== null)) {
-    throw new Error(`"${CREATE}" printed ${JSON.stringify(r.stdout.trim().slice(0, 200))}, not {"id": "<one path segment>", "url": "<url>"|null}`)
+    throw new Error(`tracker create returned ${String(JSON.stringify(t)).slice(0, 200)}, not {"id": "<one path segment>", "url": "<url>"|null}`)
   }
   return { id: t.id, url: t.url }
 }
 
 /** Records in the tracker that `ticket` is blocked by `blocker`. */
-export const linkBlocker = async (run: Run, tracker: string, ticket: string, blocker: string) => {
+export const linkBlocker = async (tracker: Tracker, ticket: string, blocker: string) => {
   for (const v of [ticket, blocker]) if (!namesWorktree(v)) throw new Error(`${JSON.stringify(v)} is not a ticket id`)
-  await call(run, command(tracker, LINK_BLOCKER), LINK_BLOCKER, ticket, blocker)
+  await tracker('link_blocker', { id: ticket, blocked_by: blocker })
 }
 
 /** Frees the tickets stacked on `ticket`, which is done: the host retargets their PRs, so each is an ordinary PR. */
@@ -71,24 +38,18 @@ const ANSWERS = ['{"merged":true}', '{"merged":false}', '{"merged":false,"closed
  * dependents; sends one whose PR was closed unmerged to needs_human, with every ticket stacked on it. Resolves the
  * ids marked done and what to log.
  */
-export const closeMerged = async (run: Run, db: string, tracker: string): Promise<{ done: string[]; log: string[] }> => {
-  // both are looked up first, so a tracker.md without them fails even when no PR is open
-  const [merged, markDone] = [command(tracker, MERGED), command(tracker, MARK_DONE)]
+export const closeMerged = async (tracker: Tracker, run: Run, db: string): Promise<{ done: string[]; log: string[] }> => {
   const open = await sql(run, db, `select ticket_id, pr_url from tickets where status = 'pr_open' order by rowid`)
   const done: string[] = []
   const log: string[] = []
   for (const t of open) {
     const ticket = String(t.ticket_id)
     if (typeof t.pr_url !== 'string') throw new Error(`${ticket} is pr_open with no pr_url`)
-    const out = await call(run, merged, MERGED, t.pr_url)
-    let answer = ''
-    try {
-      answer = JSON.stringify(JSON.parse(out))
-    } catch {}
-    if (!ANSWERS.includes(answer)) throw new Error(`"${MERGED}" printed ${JSON.stringify(out.slice(0, 200))} for ${t.pr_url}, not {"merged": true|false} or {"merged": false, "closed": true}`)
+    const answer = String(JSON.stringify(await tracker('pr_merged', { url: t.pr_url })))
+    if (!ANSWERS.includes(answer)) throw new Error(`tracker pr_merged returned ${answer.slice(0, 200)} for ${t.pr_url}, not {"merged": true|false} or {"merged": false, "closed": true}`)
     if (answer === '{"merged":false}') continue
     if (answer === '{"merged":true}') {
-      await call(run, markDone, MARK_DONE, ticket)
+      await tracker('mark_done', { id: ticket })
       await sql(run, db, `update tickets set status = 'done' where ticket_id = ${lit(ticket)} and status = 'pr_open'; ${unstack(ticket)}`)
       done.push(ticket)
       log.push(`${ticket} is done: its PR merged`)
@@ -121,52 +82,55 @@ const stackedOn = async (run: Run, db: string) => {
 }
 
 /**
- * With stacking on (`depth` above 1), runs tracker.md's up-to-date command for each pr_open stacked ticket, bottom of
- * its stack first, and sends one whose command fails to needs_human. Resolves what to log.
+ * With stacking on (`depth` above 1), calls the tracker's `pr_restack` for each pr_open stacked ticket, bottom of its
+ * stack first, and sends one whose call fails to needs_human. Resolves what to log.
  */
-export const restack = async (run: Run, db: string, tracker: string, depth: number): Promise<string[]> => {
+export const restack = async (tracker: Tracker, run: Run, db: string, depth: number): Promise<string[]> => {
   if (depth === 1) return []
-  const cmd = command(tracker, RESTACK)
   const rows = await stackedOn(run, db)
   const on = new Map([...rows].map(([id, r]) => [id, r.stacked_on]))
   const stacked = [...rows].filter(([, r]) => r.status === 'pr_open' && r.stacked_on !== null).sort(([a], [b]) => height(on, a) - height(on, b))
   const log: string[] = []
   for (const [ticket, t] of stacked) {
-    const r = await run(['sh', '-c', cmd, 'sh', String(t.pr_url)])
-    if (r.exitCode === 0) continue
+    let failed: string
+    try {
+      await tracker('pr_restack', { url: t.pr_url })
+      continue
+    } catch (err) {
+      failed = (err as Error).message
+    }
     const base = rows.get(String(t.stacked_on))?.pr_url ?? t.stacked_on
-    const question = `Its PR ${t.pr_url} could not be brought up to date with the PR it is stacked on, ${base}: ${r.stderr.trim()}. Resolve the conflict on its branch, then set the ticket pr_open.`
+    const question = `Its PR ${t.pr_url} could not be brought up to date with the PR it is stacked on, ${base}: ${failed}. Resolve the conflict on its branch, then set the ticket pr_open.`
     await sql(run, db, `update tickets set status = 'needs_human', question = ${lit(question)} where ticket_id = ${lit(ticket)} and status = 'pr_open'`)
     log.push(`${ticket} needs you: its stacked PR could not be brought up to date`)
   }
   return log
 }
 
-const bad = (heading: string, row: Row, field: string): never => {
-  throw new Error(`"${heading}" printed a row with a bad ${field}: ${JSON.stringify(row)}`)
+const bad = (op: string, row: Row, field: string): never => {
+  throw new Error(`tracker ${op} returned a row with a bad ${field}: ${JSON.stringify(row)}`)
 }
 
 /** Tracker ids are strings or integers; the pipeline stores them as text. */
-const id = (heading: string, row: Row, field = 'id') => {
+const id = (op: string, row: Row, field = 'id') => {
   const v = row[field]
   if ((typeof v === 'string' && v !== '') || Number.isInteger(v)) return String(v)
-  return bad(heading, row, field)
+  return bad(op, row, field)
 }
 
 /**
- * Pulls the tracker into the pipeline table, following the three commands in tracker.md, in one transaction. With
+ * Pulls the tracker into the pipeline table, from its `waiting`, `done` and `blockers` ops, in one transaction. With
  * stacking on (`depth` above 1), a ticket whose only unfinished blocker is pr_open is pulled in stacked on it while
  * the stack stays within `depth` and nothing else is stacked on that blocker. Resolves the ids it marked done.
  */
-export const sync = async (run: Run, db: string, tracker: string, depth = 1): Promise<string[]> => {
-  if (depth > 1 && !/\S/.test(section(tracker, STACK) ?? '')) throw new Error(`tracker.md has no instructions under "## ${STACK}"; run /tracker-setup`)
-  const [waiting, done, blockers] = await Promise.all([list(run, tracker, WAITING), list(run, tracker, DONE), list(run, tracker, BLOCKERS)])
+export const sync = async (tracker: Tracker, run: Run, db: string, depth = 1): Promise<string[]> => {
+  const [waiting, done, blockers] = await Promise.all([list(tracker, 'waiting'), list(tracker, 'done'), list(tracker, 'blockers')])
 
   const blocked = new Map<string, Set<string>>()
   for (const b of blockers) {
-    const by = id(BLOCKERS, b, 'blocked_by')
-    if (![true, false, 0, 1].includes(b.blocker_done as never)) bad(BLOCKERS, b, 'blocker_done')
-    if (!b.blocker_done) blocked.set(id(BLOCKERS, b), (blocked.get(id(BLOCKERS, b)) ?? new Set()).add(by))
+    const by = id('blockers', b, 'blocked_by')
+    if (![true, false, 0, 1].includes(b.blocker_done as never)) bad('blockers', b, 'blocker_done')
+    if (!b.blocker_done) blocked.set(id('blockers', b), (blocked.get(id('blockers', b)) ?? new Set()).add(by))
   }
 
   const rows = depth > 1 ? await stackedOn(run, db) : new Map()
@@ -186,10 +150,10 @@ export const sync = async (run: Run, db: string, tracker: string, depth = 1): Pr
   const statements = ['begin;']
   const held: string[] = []
   for (const t of waiting) {
-    const ticket = id(WAITING, t)
-    if (typeof t.title !== 'string') bad(WAITING, t, 'title')
-    if (typeof t.url !== 'string' && t.url !== null) bad(WAITING, t, 'url')
-    if (typeof t.body !== 'string' && t.body !== null) bad(WAITING, t, 'body')
+    const ticket = id('waiting', t)
+    if (typeof t.title !== 'string') bad('waiting', t, 'title')
+    if (typeof t.url !== 'string' && t.url !== null) bad('waiting', t, 'url')
+    if (typeof t.body !== 'string' && t.body !== null) bad('waiting', t, 'body')
     const stack = blocked.has(ticket) ? base(ticket) : null
     if (stack === undefined) {
       held.push(ticket)
@@ -202,7 +166,7 @@ export const sync = async (run: Run, db: string, tracker: string, depth = 1): Pr
   }
   // a ticket that became blocked leaves until its blockers are done, unless work on it has started
   for (const ticket of held) statements.push(`delete from tickets where ticket_id = ${lit(ticket)} and status in ('new', 'ready');`)
-  const ids = done.map(t => id(DONE, t))
+  const ids = done.map(t => id('done', t))
   for (const ticket of ids) statements.push(`update tickets set status = 'done', restarts = 0 where ticket_id = ${lit(ticket)};`, unstack(ticket))
   statements.push('commit;')
   // read before the write: sqlite3 -json prints one array per statement, so a returning inside the transaction would not parse
