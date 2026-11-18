@@ -14,8 +14,9 @@ shell works, every agent prompt hard-codes one host's CLI, and each agent compos
 where it loads automatically. The mod registers one `tracker` tool covering both the tracker and the PR host. Setup's
 agent implements each operation with whatever reaches them: MCP calls, HTTP, or shell (the mod may run `gh` inside).
 The loop, every pipeline agent, `/learn` and `/pipeline-status` use only that tool, so a project whose tracker and PR
-host are MCP-only works exactly like one with a CLI. `tracker.md` and `tracker.sh` go away; existing projects are
-ported by running `/tracker-setup` again.
+host are MCP-only works exactly like one with a CLI. Outside a session, `bin/pipeline.ts` and `pipeline-tui` reach
+the same operations through the mod's `/pipeline-tracker` command in a headless `claude -p`. `tracker.md` and
+`tracker.sh` go away; existing projects are ported by running `/tracker-setup` again.
 
 ## User Stories
 
@@ -47,12 +48,14 @@ ported by running `/tracker-setup` again.
 26. As a user of a project without the mod, I want the loop to log "no pipeline tracker tool here; run /tracker-setup" and skip its tracker steps, so that I know what to do.
 27. As a user of a project set up before this change, I want `/tracker-setup` to translate my `tracker.md` or `tracker.sh` into the mod, so that porting keeps the commands I already proved.
 28. As a user, I want credentials kept out of the mod, so that committing it leaks nothing.
+29. As a user filing work from `bin/pipeline.ts` or `pipeline-tui`, I want them to create tickets and link blockers through the mod, so that they work on any tracker the mod reaches, MCP-only ones included.
+30. As a user with stacking on, I want stacked PRs opened and brought up to date through the tool, so that stacking works on any PR host.
 
 ## Implementation Decisions
 
 - **The project mod.** `/tracker-setup` writes `<project>/.claude/skills/pipeline-tracker/`: a plugin manifest, a hooks module registering the tool and answering it in its `tool.call` hook, a README, and its contract tests. Project mods load automatically and reload on change. It is project code: the pipeline plugin ships no adapter.
 - **One tool,** `tracker`, registered with `isDeferred: false`, input `{op, ...args}`. The PR operations are prefixed `pr_`.
-- **The contract,** sixteen operations:
+- **The contract,** nineteen operations:
 
   | `op` | Input | Returns |
   |---|---|---|
@@ -60,24 +63,29 @@ ported by running `/tracker-setup` again.
   | `done` | none | `[{id}]` |
   | `blockers` | none | `[{id, blocked_by, blocker_done}]`, or `[]` when the tracker has no links |
   | `mark_done` | `id` | ok; succeeds when the ticket is already done |
+  | `create` | `title`, `body` | `{id, url}`; `id` is one path segment |
+  | `link_blocker` | `id`, `blocked_by` | ok; records that `id` is blocked by `blocked_by` |
   | `read` | `id` | `{id, title, url, body, comments: [{author, at, text}]}` |
   | `move` | `id`, `status` (`in_progress` / `in_review` / `done`) | ok |
   | `comment` | `id`, `text` | ok |
   | `link_pr` | `id`, `url` | ok |
-  | `pr_create` | `branch`, `title`, `body`, `draft` | `{url}` |
+  | `pr_create` | `branch`, `title`, `body`, `draft`, `base?` | `{url}`; `base` is the head branch of the PR to stack on, else the default branch |
   | `pr_view` | `url` | `{title, branch, head, draft, merged}` |
-  | `pr_merged` | `url` | `{merged: true\|false}` |
+  | `pr_merged` | `url` | `{merged: true}`, `{merged: false}` (open) or `{merged: false, closed: true}` |
   | `pr_diff` | `url` | the diff, as text |
   | `pr_comment` | `url`, `text` | ok |
   | `pr_comments` | `url` | `[{author, at, text, path?, line?}]`, general and inline together |
   | `pr_edit` | `url`, `title?`, `body?` | ok |
   | `pr_ready` | `url` | ok |
+  | `pr_restack` | `url` | ok once the PR's branch is up to date with its base, on the host, touching no local checkout; an error on a conflict |
 
-  The fields and rules of `waiting`, `done`, `blockers`, `pr_merged` and `mark_done` are today's `tracker.md` contract unchanged (ids as strings or integers, `url` and `body` nullable, `blocker_done` true or false). `git push` stays plain git.
+  The fields and rules of `waiting`, `done`, `blockers`, `pr_merged`, `mark_done`, `create`, `link_blocker` and `pr_restack` are today's `tracker.md` contract unchanged (ids as strings or integers, `url` and `body` nullable, `blocker_done` true or false). `git push` stays plain git.
 - **Drafts in the mod.** `pr_create` with `draft: true` opens a host draft titled `Draft: <title>`; `pr_ready` marks it ready on the host and strips the prefix in one call. On a host without drafts the prefix alone marks it.
 - **Statuses.** `move` takes pipeline statuses; the mod maps them to the board's, and the README records the mapping.
 - **Failures.** Each operation is bounded at 30 seconds inside the mod. A failure returns an error naming the reason. No retries inside the mod.
 - **The loop** calls the tool through `$.tool.call` (cross-plugin calls are not affected by the nesting rule, docs/adr/0001). The loop's `Deps` gains a `tracker(op, args)` call in place of running `tracker.md` commands; `closeMerged` and `sync` take it and keep their validation of every result. A missing `tracker` tool replaces the missing-`tracker.md` check: the pass logs "no pipeline tracker tool here; run /tracker-setup" and skips the merge check, sync and mark-done, while `readiness.md`, `rubric.md` and `routing.md` stay in `.claude/pipeline/` and are still required. A tool error is caught as tracker failures are today and logged "tracker unreachable: …".
+- **Stacking.** `## Open a stacked PR` and `## Bring a stacked PR up to date` go away. The implementer finds the head branch of the PR to stack on with `pr_view` and opens its PR with `pr_create`'s `base`. `restack` calls `pr_restack` and keeps its needs_human rule.
+- **Outside a session.** The mod registers a `/pipeline-tracker <op> <json args>` command. Its `command.run` hook runs the op and answers `{text, exitCode}`: the result as JSON and 0, or the error and 1. No model turn runs. `bin/pipeline.ts` runs `tracker create` and `tracker link-blocker` as `claude -p "/pipeline-tracker …"` from the project root, and `pipeline-tui` keeps calling `bin/pipeline.ts`. Without the mod the CLI fails with "run /tracker-setup".
 - **Agents.** The implementer, reviewer, verifier and fixer prompts replace every `gh pr …` command and every reference to `tracker.md` with the `tracker` ops. Using the tool is a prompt rule; no guard refuses direct CLI calls. The `tool.check` allow in `pipeline-agents` already covers the loop's agents' calls.
 - **Skills.** `/learn` reads PR comments with `pr_comments`. `/pipeline-status` reads blockers and comments answers through the tool. `/tracker-setup` is rewritten:
   1. Find the MCP servers or CLIs reaching the tracker and the PR host (often two) and check they are connected.
@@ -97,6 +105,7 @@ ported by running `/tracker-setup` again.
 - Test the loop's behaviour, not the engine or any one tracker.
 - **The loop, through `pass`,** with a fake `tracker` in `Deps` in place of today's `sh -c` stubs: the existing `sync.spec.ts` and `loop.spec.ts` cases keep their meaning. New cases: with no tracker tool the pass logs "run /tracker-setup" and skips the tracker steps; a tracker error logs "tracker unreachable" and the rest of the pass runs; a malformed op result is rejected as today.
 - **Prompts, through `prompts.spec.ts`:** no agent prompt, `/learn` or `/pipeline-status` contains a `gh pr` command or names `tracker.md`; each agent prompt names the `tracker` ops it uses.
+- **The CLI, through `test/cli.spec.ts`:** `tracker create` and `tracker link-blocker` run `claude -p "/pipeline-tracker …"` and print its result; a non-zero exit fails the CLI with the error.
 - **One `claude plugin test`** with a stand-in `tracker` mod: the loop's `$.tool.call` reaches it, and an agent spawned by `pipeline` calls it, both through the engine, proving a project mod's tool answers both despite docs/adr/0001.
 - The generated mod's contract tests belong to each project and are written by setup; the setup skill is instructions and has no test here.
 - Prior art: `pipeline-agents/test/report-result.test.ts` (calling a tool from a loop-spawned agent through the engine), the `deps` stub and `freshProject` in the loop tests, `test/prompts.spec.ts`.
@@ -110,7 +119,7 @@ None from the discussion.
 - Guarding against agents calling a host CLI directly.
 - Retries inside the mod.
 - A live check of write operations during setup.
-- Operations beyond the sixteen; more are added when a host shows a need.
+- Operations beyond the nineteen; more are added when a host shows a need.
 - Compatibility with `tracker.md` or `tracker.sh`.
 
 ## Further Notes
