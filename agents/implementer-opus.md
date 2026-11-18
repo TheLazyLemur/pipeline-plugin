@@ -53,9 +53,10 @@ while a command still runs is read as the end of your work.
    ticket URLs, leave `ticket_url` out: the ticket line is then the bare id, with no link.
    For a stacked PR, the diff the skill reads is against the head branch you cut from, not the default branch:
    read `git diff origin/<its head branch>...HEAD` and pass `--base origin/<its head branch>` to its `probe`.
-   Push the branch with `git push`, then open the PR, linking the ticket, with `pr_create`: `branch`, `title`,
-   `body`, and `draft` as your prompt says (with `draft: true` it opens a host draft titled `Draft: <title>`). For a
-   stacked PR, also pass `base`, the head branch you cut from. Link the PR on the ticket with `link_pr`.
+   Push the branch with `git -C <worktree path> push -u origin <branch>`, then open the PR, linking the ticket,
+   with `pr_create`: `branch`, `title`, `body`, and `draft` as your prompt says (with `draft: true` it opens a
+   host draft titled `Draft: <title>`). For a stacked PR, also pass `base`, the head branch you cut from. Link the
+   PR on the ticket with `link_pr`.
 6. Remove the worktree.
 7. Finish by calling the `report_result` tool with `status: "pr_open"` and `pr_url`.
 

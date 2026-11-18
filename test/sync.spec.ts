@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { sql } from '../pipeline-agents/src/store.ts'
-import { sync } from '../src/sync.ts'
+import type { ToolCallArgs, ToolCallResult } from 'claude-code'
+import { TRACKER_TOOL } from '../pipeline-agents/src/agents.ts'
+import { sync, trackerTool } from '../src/sync.ts'
 import { fakeTracker, freshDb, run } from './helpers.ts'
 
 /** A tracker tool whose three sync ops return the given results. */
@@ -194,4 +196,75 @@ test('a ticket done in the tracker frees the tickets stacked on it', async () =>
     { ticket_id: '1', status: 'done', stacked_on: null },
     { ticket_id: '2', status: 'in_progress', stacked_on: null },
   ])
+})
+
+/** `$.tool` listing `names` and answering every call with `answer`; `calls` records each call's input. */
+const toolApi = (names: string[], answer: ToolCallResult) => {
+  const calls: ToolCallArgs[] = []
+  return {
+    calls,
+    list: async () => names.map(name => ({ name })),
+    call: async (input: ToolCallArgs) => {
+      calls.push(input)
+      return answer
+    },
+  }
+}
+
+test('with no tracker tool loaded there is no tracker', async () => {
+  // given
+  // ... a session whose tools do not include the tracker tool
+  const tool = toolApi(['Read'], { result: [] })
+
+  // when
+  // ... the loop looks up its tracker
+  const tracker = await trackerTool(tool)
+
+  // then
+  // ... it has none
+  assert.equal(tracker, null)
+})
+
+test('a tracker op calls the tracker tool with op and arguments and resolves the tool result', async () => {
+  // given
+  // ... the tracker tool loaded and answering a list of rows
+  const tool = toolApi(['Read', TRACKER_TOOL], { result: [{ id: '1' }], text: 'shown to the model' })
+
+  // when
+  // ... the loop calls one op with arguments
+  const tracker = await trackerTool(tool)
+  const out = await tracker?.('pr_view', { url: 'https://git/pr/1' })
+
+  // then
+  // ... the call carries the tool name, the arguments and op, and resolves the result itself
+  assert.deepEqual(tool.calls, [{ tool: TRACKER_TOOL, url: 'https://git/pr/1', op: 'pr_view' }])
+  assert.deepEqual(out, [{ id: '1' }])
+})
+
+test('a denied tracker call rejects with the reason', async () => {
+  // given
+  // ... the tracker tool loaded and a hook denying the call
+  const tracker = await trackerTool(toolApi([TRACKER_TOOL], { deny: 'not allowed' }))
+
+  // when
+  // ... the loop calls an op
+  const call = tracker?.('waiting')
+
+  // then
+  // ... it rejects with the deny's reason
+  await assert.rejects(call ?? Promise.resolve(), { message: 'not allowed' })
+})
+
+test('a tracker call answered with an error rejects with its text', async () => {
+  // given
+  // ... the tracker tool loaded and answering an error
+  const tracker = await trackerTool(toolApi([TRACKER_TOOL], { isError: true, result: null, text: 'gh timed out' }))
+
+  // when
+  // ... the loop calls an op
+  const call = tracker?.('done')
+
+  // then
+  // ... it rejects naming the op and the error
+  await assert.rejects(call ?? Promise.resolve(), { message: 'tracker done failed: gh timed out' })
 })

@@ -31,12 +31,12 @@ while a command still runs is read as the end of your work.
 6. Rewrite the PR's title and description with the `pipeline:writing-pull-requests` skill so they describe the
    branch as it now stands: load it and follow it. Run its `check` on the body and on the title without the
    `Draft: ` prefix, and do not update the PR until `check` passes. The diff the skill reads is against the PR's
-   own base branch: with a `Stack on:` line, that PR's branch (`branch` from `pr_view` on it), not the default
-   branch; without one, origin's default branch (`git symbolic-ref --short refs/remotes/origin/HEAD`). Fetch it,
-   then read `git diff origin/<base>...HEAD` and pass `--base origin/<base>` to its `probe`. Then update the PR
-   with `pr_edit`, the new body and the new title, keeping the `Draft: ` prefix in front (`Draft: <title>`). In
-   the skill's facts file, set `ticket` to the ticket's id and `ticket_url` to its URL. When the tracker has no
-   ticket URLs, leave `ticket_url` out: the ticket line is then the bare id, with no link.
+   own base: with a `Stack on:` line, `origin/<that PR's branch>` (`branch` from `pr_view` on it), not the default
+   branch; without one, origin's default branch as `git symbolic-ref --short refs/remotes/origin/HEAD` prints it,
+   `origin/` included. Fetch it, then read `git diff <base>...HEAD` and pass `--base <base>` to its `probe`. Then
+   update the PR with `pr_edit`, the new body and the new title, keeping the `Draft: ` prefix in front
+   (`Draft: <title>`). In the skill's facts file, set `ticket` to the ticket's id and `ticket_url` to its URL. When the
+   tracker has no ticket URLs, leave `ticket_url` out: the ticket line is then the bare id, with no link.
 7. Comment on the PR, starting with the line `Fixer notes`, one numbered line per checked finding, using the
    finding's number from the checked list: `<n>. fixed: <what you changed>` or `<n>. not fixed: <why>`, with
    `pr_comment`. /learn reads this heading and these lines, so keep them exact.

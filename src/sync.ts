@@ -1,8 +1,21 @@
+import type { ToolCallArgs, ToolCallResult } from 'claude-code'
+import { TRACKER_TOOL } from '../pipeline-agents/src/agents.ts'
 import { namesWorktree } from '../pipeline-agents/src/guards.ts'
 import { type Run, lit, sql } from '../pipeline-agents/src/store.ts'
 
 /** One call of the project's tracker tool (`TRACKER_TOOL`): `op` and its arguments in, the op's result out; rejects with the reason the op failed. */
 export type Tracker = (op: string, args?: Record<string, unknown>) => Promise<unknown>
+
+/** The `Tracker` over `$.tool`, or null while the project's mod has no `TRACKER_TOOL` loaded. A deny or an error result rejects. */
+export const trackerTool = async (tool: { list: () => Promise<{ name: string }[]>; call: (input: ToolCallArgs) => Promise<ToolCallResult> }): Promise<Tracker | null> =>
+  (await tool.list()).some(t => t.name === TRACKER_TOOL)
+    ? async (op, args) => {
+        const r = await tool.call({ tool: TRACKER_TOOL, ...args, op })
+        if (r.deny !== undefined) throw new Error(r.deny)
+        if (r.isError) throw new Error(`tracker ${op} failed: ${r.text ?? String(r.result)}`)
+        return r.result
+      }
+    : null
 
 type Row = Record<string, unknown>
 
