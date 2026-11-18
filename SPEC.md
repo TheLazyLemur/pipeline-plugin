@@ -53,7 +53,9 @@ One pass of the loop (`src/loop.ts`), in order:
    checkout's HEAD, which may be behind the remote. With `origin/HEAD` unset the ticket is not claimed and the pass
    logs "run git remote set-head origin --auto". The claim is one guarded
    update that sets the owner; a pass whose claim gets no row back (another pass won it) spawns nothing. If the
-   spawn is denied, the ticket goes back to ready and the loop retries next pass.
+   spawn is denied, the ticket goes back to ready and the loop retries next pass. Before the claim, a ready ticket
+   whose id cannot name a worktree (not one path segment) goes to needs_human with a question naming the id, and
+   the pass claims the next ready one.
 7. Notify: each ticket that entered `needs_human` (with its question), `pr_open` (its PR is ready for review) or
    `done` (its PR merged) since it was last notified gets one ntfy notification (`src/notify.ts`), whichever code
    moved it. Its `notified_status` records the status sent; a ticket that leaves those statuses has it reset at the
@@ -207,8 +209,8 @@ notice of those agents, which would start a turn on the main thread; you still s
 
 ### Needing you
 A ticket goes to needs_human when triage finds it not ready (missing acceptance criteria, open questions) or
-ready but with confidence below routing.md's threshold, the implementer is blocked or ends without a result, an
-agent is hard-stopped at its limit, its implementer disappears, its PR was closed without merging (or the PR it is
+ready but with confidence below routing.md's threshold, the implementer is blocked or ends without a result, its id cannot name a
+worktree, an agent is hard-stopped at its limit, its implementer disappears, its PR was closed without merging (or the PR it is
 stacked on was), or its stacked PR could not be brought up to date. The question is stored on
 the ticket. `/pipeline-status` in your session lists them; your answer is saved as a comment on the tracker
 ticket, for the implementer, and appended with its question to the ticket's `answers`, for triage, and the ticket
